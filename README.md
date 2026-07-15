@@ -105,6 +105,59 @@ Precisa de pelo menos 3 snapshots para gerar um resultado `confiavel=True`
 Esse score ainda não entra automaticamente no ranking ponderado (é uma
 estratégia adicional candidata — ver "Limitações conhecidas" abaixo).
 
+## Fonte de dados fundamentalistas: CVM (gratuita, oficial)
+
+A Brapi deixou de oferecer os módulos fundamentalistas (`defaultKeyStatistics`,
+`financialData`) de graça além de 4 tickers de teste — ver decisão registrada
+abaixo em "Histórico de decisões". Migramos o **histórico de lucro líquido**
+para a fonte oficial e gratuita da CVM (Comissão de Valores Mobiliários).
+
+- **`app/data_sources/cvm_client.py`**: baixa e faz parsing dos arquivos
+  anuais de DFP (Demonstrações Financeiras Padronizadas) publicados pela
+  CVM em `dados.cvm.gov.br`. Cada arquivo cobre TODAS as companhias
+  abertas do Brasil daquele ano — por isso a estratégia é baixar uma vez
+  por ano (com cache local em `cache_cvm/`) e indexar por CNPJ em memória,
+  em vez de uma requisição por empresa.
+- **`app/data_sources/ticker_mapping.py`**: mapeia ticker (B3) -> CNPJ,
+  porque a CVM identifica empresas por CNPJ, não por código de negociação.
+  ⚠️ **Os CNPJs precisam ser conferidos** contra o Formulário Cadastral da
+  CVM ou a página de cada empresa em b3.com.br antes de confiar nos dados
+  em produção — este ambiente de desenvolvimento não teve acesso à
+  internet para validar cada um.
+- **`app/jobs/importar_cvm.py`**: orquestra a importação de múltiplos anos
+  e persiste como snapshots — os mesmos que já alimentam
+  `/empresas/{ticker}/consistencia-lucro` e `/empresas/{ticker}/historico`,
+  sem precisar de nenhum endpoint novo para consumir esse dado.
+
+**Disparar a importação**: `POST /coleta/cvm/lucro-historico?tickers=PETR4&anos=2021&anos=2022&anos=2023&anos=2024&anos=2025`
+— a primeira chamada de cada ano é lenta (baixa um arquivo grande com
+todas as empresas do Brasil); chamadas seguintes usam cache em disco.
+
+### O que a CVM NÃO resolve (Fase 2, ainda não implementada)
+
+A CVM cuida de balanços, não de cotação de mercado — ela **não publica
+preço de ação nem quantidade de ações emitidas**. Isso significa que
+Graham, Fórmula Mágica e Bazin (que precisam de preço e de indicadores
+"por ação") continuam precisando de uma fonte separada. A B3 disponibiliza
+cotações históricas gratuitamente (arquivos "COTAHIST"), o que resolveria
+o preço; quantidade de ações emitidas provavelmente está na seção "Dados
+da Empresa/Composição do Capital" que a CVM passou a incluir no DFP/ITR
+mais recentemente — mas essa integração ainda não foi construída. Até lá,
+os snapshots importados da CVM têm `preco_atual=0.0` como sentinela
+explícito ("sem preço, só fundamentos") e **não devem ser usados como
+entrada do `gerar_ranking()`** — apenas de `calcular_consistencia_lucro()`,
+que não depende de preço.
+
+### Testes do parser CVM
+
+`tests/test_cvm_client.py` valida a lógica de parsing (filtro de
+ORDEM_EXERC, código de conta do lucro líquido, escala MIL/UNIDADE, etc.)
+contra um CSV **sintético** que reproduz o formato documentado pela CVM —
+este ambiente de desenvolvimento não teve acesso à internet para baixar e
+testar contra o arquivo real. **Antes de confiar nos números em produção**,
+valide `buscar_lucro_liquido_por_ano` para 2-3 empresas conhecidas contra
+o demonstrativo publicado no site de RI de cada uma.
+
 ## Migrando para Postgres
 
 O MVP usa `sqlite3` (stdlib) por simplicidade — zero dependência externa
@@ -171,5 +224,14 @@ anos de coleta).
   o histórico: um "salto" de lucro só aparece quando a empresa publica o
   resultado, não todo dia).
 - **Google Finance não foi integrado** — sem API pública oficial; scraping
-  violaria os termos de uso. Alternativas: Brapi (em uso), Yahoo Finance
-  (não oficial), dados abertos da CVM (oficial, mais trabalhoso de parsear).
+  violaria os termos de uso.
+
+## Histórico de decisões
+
+- **Migração de Brapi para CVM (dados fundamentalistas)**: a Brapi deixou
+  de oferecer os módulos `defaultKeyStatistics`/`financialData` de graça
+  além de 4 tickers de teste (ver `app/data_sources/brapi_client.py`,
+  ainda usado para preço/cotação simples). Optamos por migrar o histórico
+  de lucro líquido para a CVM (gratuita, oficial, sem limite de
+  requisições), aceitando o trade-off de mais trabalho de engenharia —
+  ver seção "Fonte de dados fundamentalistas: CVM" acima.

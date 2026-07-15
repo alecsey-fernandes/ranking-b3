@@ -21,11 +21,17 @@ _CAMPOS_INDICADOR = [
 
 
 def salvar_empresa(conn: sqlite3.Connection, indicadores: Indicadores) -> None:
-    """Upsert do cadastro básico da empresa (idempotente)."""
+    """Upsert do cadastro básico da empresa (idempotente).
+    Não sobrescreve um nome/setor já cadastrado com um placeholder: se o
+    `nome` recebido for igual ao próprio ticker (convenção usada por
+    importações que só têm fundamentos, sem cadastro completo — ver
+    app/jobs/importar_cvm.py), mantém o nome já existente."""
     conn.execute(
         """
         INSERT INTO empresa (ticker, nome, setor) VALUES (?, ?, ?)
-        ON CONFLICT(ticker) DO UPDATE SET nome = excluded.nome, setor = excluded.setor
+        ON CONFLICT(ticker) DO UPDATE SET
+            nome = CASE WHEN excluded.nome != empresa.ticker THEN excluded.nome ELSE empresa.nome END,
+            setor = COALESCE(excluded.setor, empresa.setor)
         """,
         (indicadores.ticker, indicadores.nome, indicadores.setor),
     )
@@ -70,7 +76,9 @@ def salvar_snapshot_ranking(
         conn.execute(
             """
             INSERT INTO empresa (ticker, nome, setor) VALUES (?, ?, ?)
-            ON CONFLICT(ticker) DO UPDATE SET nome = excluded.nome, setor = excluded.setor
+            ON CONFLICT(ticker) DO UPDATE SET
+                nome = CASE WHEN excluded.nome != empresa.ticker THEN excluded.nome ELSE empresa.nome END,
+                setor = COALESCE(excluded.setor, empresa.setor)
             """,
             (linha.ticker, linha.nome, linha.setor),
         )

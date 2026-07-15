@@ -9,6 +9,7 @@ from app.config import PesosEstrategias, pesos_padrao
 from app.data_sources.brapi_client import BrapiClient, BrapiClientError
 from app.db.connection import get_connection
 from app.db.repository import buscar_evolucao_ranking, buscar_historico_indicadores
+from app.jobs.importar_cvm import importar_lucro_historico_cvm
 from app.jobs.scheduler import coletar_e_persistir, iniciar_scheduler
 from app.ranking.aggregator import gerar_ranking
 from app.strategies.bazin import BazinStrategy
@@ -71,6 +72,23 @@ async def executar_coleta_manual(
     resultado = await coletar_e_persistir(tickers)
     if not resultado["sucesso"]:
         raise HTTPException(status_code=502, detail=resultado.get("erro", "falha desconhecida na coleta"))
+    return resultado
+
+
+@app.post("/coleta/cvm/lucro-historico")
+async def importar_lucro_historico(
+    tickers: list[str] = Query(default=UNIVERSO_MVP, description="Tickers a importar"),
+    anos: list[int] = Query(default=[2021, 2022, 2023, 2024, 2025], description="Anos a importar (um por vez, arquivo grande por ano)"),
+):
+    """
+    Importa lucro líquido histórico direto da CVM (fonte oficial, gratuita)
+    para os anos e tickers informados, e persiste como snapshots — os
+    mesmos que alimentam /empresas/{ticker}/consistencia-lucro e
+    /empresas/{ticker}/historico. Cada ano baixa um arquivo grande (todas
+    as empresas do Brasil); a primeira chamada pode demorar bastante —
+    chamadas seguintes para o mesmo ano usam cache local em disco.
+    """
+    resultado = await importar_lucro_historico_cvm(tickers, anos)
     return resultado
 
 
