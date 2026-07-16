@@ -9,6 +9,7 @@ from app.config import PesosEstrategias, pesos_padrao
 from app.data_sources.brapi_client import BrapiClient, BrapiClientError
 from app.db.connection import get_connection
 from app.db.repository import buscar_evolucao_ranking, buscar_historico_indicadores
+from app.jobs.atualizar_precos_b3 import atualizar_precos_b3
 from app.jobs.importar_cvm import importar_lucro_historico_cvm
 from app.jobs.scheduler import coletar_e_persistir, iniciar_scheduler
 from app.ranking.aggregator import gerar_ranking
@@ -72,6 +73,23 @@ async def executar_coleta_manual(
     resultado = await coletar_e_persistir(tickers)
     if not resultado["sucesso"]:
         raise HTTPException(status_code=502, detail=resultado.get("erro", "falha desconhecida na coleta"))
+    return resultado
+
+
+@app.post("/coleta/b3/precos")
+async def atualizar_precos(
+    tickers: list[str] = Query(default=UNIVERSO_MVP, description="Tickers a atualizar"),
+    ano: int | None = Query(default=None, description="Ano do arquivo COTAHIST a consultar (default: ano corrente)"),
+):
+    """
+    Busca o preço de fechamento mais recente de cada ticker no arquivo
+    de cotações históricas da B3 (gratuito, oficial) e persiste como
+    snapshot de hoje. Complementa a importação de lucro da CVM — juntos,
+    os dois preenchem preço + fundamentos sem depender de plano pago da Brapi.
+    """
+    resultado = await atualizar_precos_b3(tickers, ano)
+    if not resultado["sucesso"]:
+        raise HTTPException(status_code=502, detail=resultado.get("erro", "falha desconhecida ao buscar cotações"))
     return resultado
 
 

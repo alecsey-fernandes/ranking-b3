@@ -40,15 +40,24 @@ def salvar_empresa(conn: sqlite3.Connection, indicadores: Indicadores) -> None:
 def salvar_snapshot_indicadores(conn: sqlite3.Connection, indicadores: Indicadores) -> None:
     """
     Salva um snapshot dos indicadores de uma empresa numa data de referência.
-    Idempotente: rodar a coleta duas vezes no mesmo dia sobrescreve o
+    Idempotente: rodar a coleta duas vezes no mesmo dia atualiza o
     snapshot em vez de duplicar (chave única ticker + data_referencia).
+
+    Atualização é um MERGE campo a campo, não uma substituição total: se
+    esta chamada trouxer um campo como None (ex: uma atualização que só
+    tem preço, vinda da B3, sem os outros indicadores), o valor já salvo
+    anteriormente para esse campo é preservado em vez de apagado. Isso
+    permite combinar fontes diferentes (Brapi, CVM, B3) no mesmo snapshot
+    do dia sem uma sobrescrever os dados da outra.
     """
     salvar_empresa(conn, indicadores)
 
     valores = [getattr(indicadores, campo) for campo in _CAMPOS_INDICADOR]
     colunas = ", ".join(_CAMPOS_INDICADOR)
     placeholders = ", ".join(["?"] * len(_CAMPOS_INDICADOR))
-    atualizacoes = ", ".join([f"{campo} = excluded.{campo}" for campo in _CAMPOS_INDICADOR])
+    atualizacoes = ", ".join(
+        [f"{campo} = COALESCE(excluded.{campo}, indicador_snapshot.{campo})" for campo in _CAMPOS_INDICADOR]
+    )
 
     conn.execute(
         f"""
