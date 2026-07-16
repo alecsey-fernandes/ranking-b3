@@ -1,0 +1,95 @@
+"""
+Importa histórico de lucro líquido da CVM (múltiplos anos) e persiste
+como snapshots — alimentando diretamente a análise de consistência de
+lucro (app/analysis/consistencia.py) e o endpoint /empresas/{ticker}/historico
+já existentes, sem precisar de nenhum endpoint novo para consumir esses dados.
+
+Diferente da coleta via Brapi (que persiste TODOS os indicadores de um
+momento), essa importação é fundamentalista pura, histórica e de baixa
+frequência (a CVM publica DFP uma vez por ano, com reapresentações
+semanais possíveis) — por isso os snapshots gerados aqui têm
+`preco_atual=0.0` como sentinela explícito: "sem preço, só fundamentos
+históricos da CVM". Esses snapshots não devem ser usados como entrada do
+`gerar_ranking()` (que precisa de preço); servem para
+`calcular_consistencia_lucro()`, que não usa preço.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import date
+
+from app.data_sources.cvm_client import CvmClientError, buscar_lucro_liquido_por_ano
+from app.data_sources.ticker_mapping import TICKER_PARA_CNPJ
+from app.db.connection import get_connection, inicializar_schema
+from app.db.repository import salvar_snapshot_indicadores
+from app.models import Indicadores
+
+logger = logging.getLogger(__name__)
+
+
+async def importar_lucro_historico_cvm(
+    tickers: list[str], anos: list[int]
+) -> dict:
+    """
+    Para cada ano solicitado, baixa/parseia o DRE consolidado da CVM uma
+    única vez (todas as empresas de uma vez) e persiste o lucro líquido
+    dos tickers do nosso universo que tiverem CNPJ mapeado.
+
+    Retorna um resumo por ano: quantos tickers foram encontrados vs.
+    quantos ficaram de fora (sem CNPJ mapeado ou sem dado publicado
+    naquele ano — ex: empresa criada/listada depois).
+    """
+    inicializar_schema()
+
+    tickers_sem_cnpj = [t for t in tickers if t not in TICKER_PARA_CNPJ]
+    if tickers_sem_cnpj:
+        logger.warning(
+            "Tickers sem CNPJ mapeado em ticker_mapping.py (ignorados): %s", tickers_sem_cnpj
+        )
+
+    resumo_por_ano: dict[int, dict] = {}
+
+    for ano in anos:
+        try:
+            lucro_por_cnpj = await buscar_lucro_liquido_por_ano(ano)
+        except CvmClientError as exc:
+            logger.error("Falha ao importar DFP %d: %s", ano, exc)
+            resumo_por_ano[ano] = {"sucesso": False, "erro": str(exc)}
+            continue
+
+        encontrados = []
+        nao_encontrados = []
+
+        with get_connection() as conn:
+            for ticker in tickers:
+                cnpj = TICKER_PARA_CNPJ.get(ticker)
+                if not cnpj:
+                    continue
+
+                lucro = lucro_por_cnpj.get(cnpj)
+                if lucro is None:
+                    nao_encontrados.append(ticker)
+                    continue
+
+                indicadores = Indicadores(
+                    ticker=ticker,
+                    nome=ticker,  # nome "de verdade" já deve estar cadastrado pela coleta via Brapi; upsert não sobrescreve com pior dado por acidente porque salvar_snapshot_indicadores faz upsert do nome também — ver observação no README sobre ordem de coleta recomendada
+                    setor=None,
+                    data_referencia=date(ano, 12, 31),
+                    preco_atual=0.0,  # sentinela: sem preço, só fundamentos históricos (ver docstring do módulo)
+                    lucro_liquido=lucro,
+                )
+                salvar_snapshot_indicadores(conn, indicadores)
+                encontrados.append(ticker)
+
+        resumo_por_ano[ano] = {
+            "sucesso": True,
+            "tickers_importados": encontrados,
+            "tickers_sem_dado_no_ano": nao_encontrados,
+        }
+        logger.info(
+            "DFP %d importado: %d tickers ok, %d sem dado", ano, len(encontrados), len(nao_encontrados)
+        )
+
+    return {"tickers_sem_cnpj_mapeado": tickers_sem_cnpj, "por_ano": resumo_por_ano}
