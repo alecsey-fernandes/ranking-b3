@@ -1,95 +1,96 @@
 """
-Importa histórico de lucro líquido da CVM (múltiplos anos) e persiste
-como snapshots — alimentando diretamente a análise de consistência de
-lucro (app/analysis/consistencia.py) e o endpoint /empresas/{ticker}/historico
-já existentes, sem precisar de nenhum endpoint novo para consumir esses dados.
+Camada de conexão com o banco de dados histórico.
 
-Diferente da coleta via Brapi (que persiste TODOS os indicadores de um
-momento), essa importação é fundamentalista pura, histórica e de baixa
-frequência (a CVM publica DFP uma vez por ano, com reapresentações
-semanais possíveis) — por isso os snapshots gerados aqui têm
-`preco_atual=0.0` como sentinela explícito: "sem preço, só fundamentos
-históricos da CVM". Esses snapshots não devem ser usados como entrada do
-`gerar_ranking()` (que precisa de preço); servem para
-`calcular_consistencia_lucro()`, que não usa preço.
+Usa `sqlite3` (stdlib) por padrão — zero dependência externa, funciona
+imediatamente para desenvolvimento e para instâncias pequenas. Para
+produção com maior volume/concorrência, trocar por Postgres é uma
+mudança na camada de conexão, não na lógica: o SQL usado aqui é
+padrão ANSI (sem funções específicas do SQLite), e o repositório
+(`repository.py`) já isola todo acesso a dados dos endpoints. Ao migrar,
+troque `get_connection()` para retornar uma conexão psycopg2/SQLAlchemy
+e ajuste os placeholders `?` para `%s`.
+
+Variável de ambiente `DATABASE_PATH` define o arquivo do banco
+(default: `ranking_b3.db` no diretório de trabalho).
 """
 
 from __future__ import annotations
 
-import logging
-from datetime import date
+import os
+import sqlite3
+from contextlib import contextmanager
 
-from app.data_sources.cvm_client import CvmClientError, buscar_lucro_liquido_por_ano
-from app.data_sources.ticker_mapping import TICKER_PARA_CNPJ
-from app.db.connection import get_connection, inicializar_schema
-from app.db.repository import salvar_snapshot_indicadores
-from app.models import Indicadores
+DATABASE_PATH = os.environ.get("DATABASE_PATH", "ranking_b3.db")
 
-logger = logging.getLogger(__name__)
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS empresa (
+    ticker TEXT PRIMARY KEY,
+    nome TEXT NOT NULL,
+    setor TEXT
+);
+
+CREATE TABLE IF NOT EXISTS indicador_snapshot (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL REFERENCES empresa(ticker),
+    data_referencia TEXT NOT NULL,  -- ISO date (YYYY-MM-DD)
+    preco_atual REAL,
+    valor_mercado REAL,
+    valor_firma REAL,
+    lucro_liquido REAL,
+    ebit REAL,
+    ebitda REAL,
+    receita_liquida REAL,
+    lpa REAL,
+    vpa REAL,
+    p_l REAL,
+    p_vp REAL,
+    ev_ebit REAL,
+    ev_ebitda REAL,
+    peg_ratio REAL,
+    roe REAL,
+    roic REAL,
+    margem_liquida REAL,
+    margem_ebit REAL,
+    divida_liquida_ebitda REAL,
+    liquidez_corrente REAL,
+    dividend_yield REAL,
+    UNIQUE(ticker, data_referencia)
+);
+
+CREATE INDEX IF NOT EXISTS idx_indicador_ticker_data
+    ON indicador_snapshot(ticker, data_referencia);
+
+CREATE TABLE IF NOT EXISTS ranking_snapshot (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    data_calculo TEXT NOT NULL,  -- ISO date
+    ticker TEXT NOT NULL REFERENCES empresa(ticker),
+    score_final REAL NOT NULL,
+    posicao INTEGER NOT NULL,
+    scores_por_estrategia TEXT NOT NULL,  -- JSON: {"graham": 82.5, "magic_formula": 70.0, ...}
+    pesos_aplicados TEXT NOT NULL,        -- JSON: pesos usados nesse cálculo (auditoria histórica)
+    UNIQUE(ticker, data_calculo)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ranking_ticker_data
+    ON ranking_snapshot(ticker, data_calculo);
+"""
 
 
-async def importar_lucro_historico_cvm(
-    tickers: list[str], anos: list[int]
-) -> dict:
-    """
-    Para cada ano solicitado, baixa/parseia o DRE consolidado da CVM uma
-    única vez (todas as empresas de uma vez) e persiste o lucro líquido
-    dos tickers do nosso universo que tiverem CNPJ mapeado.
+def inicializar_schema() -> None:
+    with get_connection() as conn:
+        conn.executescript(SCHEMA)
 
-    Retorna um resumo por ano: quantos tickers foram encontrados vs.
-    quantos ficaram de fora (sem CNPJ mapeado ou sem dado publicado
-    naquele ano — ex: empresa criada/listada depois).
-    """
-    inicializar_schema()
 
-    tickers_sem_cnpj = [t for t in tickers if t not in TICKER_PARA_CNPJ]
-    if tickers_sem_cnpj:
-        logger.warning(
-            "Tickers sem CNPJ mapeado em ticker_mapping.py (ignorados): %s", tickers_sem_cnpj
-        )
-
-    resumo_por_ano: dict[int, dict] = {}
-
-    for ano in anos:
-        try:
-            lucro_por_cnpj = await buscar_lucro_liquido_por_ano(ano)
-        except CvmClientError as exc:
-            logger.error("Falha ao importar DFP %d: %s", ano, exc)
-            resumo_por_ano[ano] = {"sucesso": False, "erro": str(exc)}
-            continue
-
-        encontrados = []
-        nao_encontrados = []
-
-        with get_connection() as conn:
-            for ticker in tickers:
-                cnpj = TICKER_PARA_CNPJ.get(ticker)
-                if not cnpj:
-                    continue
-
-                lucro = lucro_por_cnpj.get(cnpj)
-                if lucro is None:
-                    nao_encontrados.append(ticker)
-                    continue
-
-                indicadores = Indicadores(
-                    ticker=ticker,
-                    nome=ticker,  # nome "de verdade" já deve estar cadastrado pela coleta via Brapi; upsert não sobrescreve com pior dado por acidente porque salvar_snapshot_indicadores faz upsert do nome também — ver observação no README sobre ordem de coleta recomendada
-                    setor=None,
-                    data_referencia=date(ano, 12, 31),
-                    preco_atual=0.0,  # sentinela: sem preço, só fundamentos históricos (ver docstring do módulo)
-                    lucro_liquido=lucro,
-                )
-                salvar_snapshot_indicadores(conn, indicadores)
-                encontrados.append(ticker)
-
-        resumo_por_ano[ano] = {
-            "sucesso": True,
-            "tickers_importados": encontrados,
-            "tickers_sem_dado_no_ano": nao_encontrados,
-        }
-        logger.info(
-            "DFP %d importado: %d tickers ok, %d sem dado", ano, len(encontrados), len(nao_encontrados)
-        )
-
-    return {"tickers_sem_cnpj_mapeado": tickers_sem_cnpj, "por_ano": resumo_por_ano}
+@contextmanager
+def get_connection():
+    conn = sqlite3.connect(DATABASE_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
