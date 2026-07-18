@@ -12,7 +12,7 @@ o arquivo real de todos os anos (a CVM já alterou nomes de coluna entre
 versões, conforme o changelog do portal).
 """
 
-from app.data_sources.cvm_client import parsear_lucro_liquido_por_cnpj
+from app.data_sources.cvm_client import parsear_composicao_capital_por_cnpj, parsear_lucro_liquido_por_cnpj
 
 CABECALHO = (
     "CNPJ_CIA;DT_REFER;VERSAO;DENOM_CIA;CD_CVM;GRUPO_DFP;MOEDA;ESCALA_MOEDA;"
@@ -87,3 +87,67 @@ def test_multiplas_empresas_no_mesmo_arquivo():
     assert resultado["11111111000111"] == 100_000.0
     assert resultado["22222222000122"] == 200_000.0
     assert resultado["33333333000133"] == 300_000.0
+
+
+CABECALHO_COMPOSICAO_CAPITAL = "CNPJ_CIA;DT_REFER;VERSAO;DENOM_CIA;QT_ACAO_ORDIN_CAP_INTEGR;QT_ACAO_PREF_CAP_INTEGR;QT_ACAO_TOTAL_CAP_INTEGR;QT_ACAO_ORDIN_TESOURO;QT_ACAO_PREF_TESOURO;QT_ACAO_TOTAL_TESOURO"
+
+
+def _linha_composicao_capital(cnpj, versao, ordinarias, preferenciais, total_capital, total_tesouro):
+    return f"{cnpj};2024-12-31;{versao};EMPRESA TESTE;{ordinarias};{preferenciais};{total_capital};0;0;{total_tesouro}"
+
+
+def test_composicao_capital_calcula_acoes_em_circulacao():
+    csv_texto = "\n".join([
+        CABECALHO_COMPOSICAO_CAPITAL,
+        _linha_composicao_capital("33.000.167/0001-01", 1, 7442454142, 5602042788, 13044496930, 155764169),
+    ])
+    resultado = parsear_composicao_capital_por_cnpj(csv_texto)
+    dado = resultado["33000167000101"]
+    assert dado["acoes_em_circulacao"] == 13044496930 - 155764169
+    assert dado["suspeito"] is False
+
+
+def test_composicao_capital_usa_versao_mais_recente():
+    csv_texto = "\n".join([
+        CABECALHO_COMPOSICAO_CAPITAL,
+        _linha_composicao_capital("11.111.111/0001-11", 1, 1000000, 0, 1000000, 0),
+        _linha_composicao_capital("11.111.111/0001-11", 2, 2000000, 0, 2000000, 0),  # retificação
+    ])
+    resultado = parsear_composicao_capital_por_cnpj(csv_texto)
+    assert resultado["11111111000111"]["acoes_total_capital"] == 2000000
+    assert resultado["11111111000111"]["versao"] == 2
+
+
+def test_composicao_capital_marca_suspeito_caso_real_vale_2024():
+    """Reproduz o caso real descoberto em produção: a Vale reportou
+    4.539.008 ações totais no DFP 2024, quando o valor real é ~4,5
+    bilhões (confirmado contra atas de assembleia de acionistas) — um
+    erro de magnitude na própria fonte oficial. O parser não deve
+    silenciosamente confiar nesse valor implausível."""
+    csv_texto = "\n".join([
+        CABECALHO_COMPOSICAO_CAPITAL,
+        _linha_composicao_capital("33.592.510/0001-54", 3, 4539008, 0, 4539008, 270288),
+    ])
+    resultado = parsear_composicao_capital_por_cnpj(csv_texto)
+    dado = resultado["33592510000154"]
+    assert dado["suspeito"] is True
+
+
+def test_composicao_capital_marca_suspeito_quando_tesouro_maior_que_capital():
+    # inconsistência interna do arquivo: tesouraria não pode ser maior que o capital total
+    csv_texto = "\n".join([
+        CABECALHO_COMPOSICAO_CAPITAL,
+        _linha_composicao_capital("22.222.222/0001-22", 1, 500000000, 500000000, 1000000000, 2000000000),
+    ])
+    resultado = parsear_composicao_capital_por_cnpj(csv_texto)
+    assert resultado["22222222000122"]["suspeito"] is True
+
+
+def test_composicao_capital_empresa_normal_nao_marcada_como_suspeita():
+    csv_texto = "\n".join([
+        CABECALHO_COMPOSICAO_CAPITAL,
+        _linha_composicao_capital("84.429.695/0001-11", 1, 4197317998, 0, 4197317998, 1780620),
+    ])
+    resultado = parsear_composicao_capital_por_cnpj(csv_texto)
+    assert resultado["84429695000111"]["suspeito"] is False
+    assert resultado["84429695000111"]["acoes_em_circulacao"] == 4197317998 - 1780620

@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS indicador_snapshot (
     divida_liquida_ebitda REAL,
     liquidez_corrente REAL,
     dividend_yield REAL,
+    acoes_em_circulacao REAL,
+    acoes_dado_suspeito INTEGER,
     UNIQUE(ticker, data_referencia)
 );
 

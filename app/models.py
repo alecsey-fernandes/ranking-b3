@@ -64,6 +64,17 @@ class Indicadores:
     lucro_liquido_ano_anterior: Optional[float] = None
     roe_historico_5a: Optional[list[float]] = None
 
+    # Composição de capital (CVM) — usado para calcular LPA/VPA quando
+    # não vêm prontos da fonte de preço/múltiplos. `acoes_dado_suspeito`
+    # sinaliza quando o valor falhou num teste de plausibilidade na
+    # origem (ver LIMIAR_MINIMO_PLAUSIVEL_ACOES em cvm_client.py) — um
+    # caso real já foi confirmado (Vale S.A., DFP 2024, valor ~1000x
+    # menor que o real). Consumidores desse campo (estratégias) devem
+    # tratar `acoes_em_circulacao` como não confiável quando esse
+    # sinalizador for True, em vez de usá-lo silenciosamente.
+    acoes_em_circulacao: Optional[float] = None
+    acoes_dado_suspeito: Optional[bool] = None
+
 
 @dataclass
 class ResultadoEstrategia:

@@ -17,6 +17,7 @@ _CAMPOS_INDICADOR = [
     "ebitda", "receita_liquida", "lpa", "vpa", "p_l", "p_vp", "ev_ebit",
     "ev_ebitda", "peg_ratio", "roe", "roic", "margem_liquida", "margem_ebit",
     "divida_liquida_ebitda", "liquidez_corrente", "dividend_yield",
+    "acoes_em_circulacao", "acoes_dado_suspeito",
 ]
 
 

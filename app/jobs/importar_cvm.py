@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from app.data_sources.cvm_client import CvmClientError, buscar_lucro_liquido_por_ano
+from app.data_sources.cvm_client import CvmClientError, buscar_composicao_capital_por_ano, buscar_lucro_liquido_por_ano
 from app.data_sources.ticker_mapping import TICKER_PARA_CNPJ
 from app.db.connection import get_connection, inicializar_schema
 from app.db.repository import salvar_snapshot_indicadores
@@ -58,8 +58,17 @@ async def importar_lucro_historico_cvm(
             resumo_por_ano[ano] = {"sucesso": False, "erro": str(exc)}
             continue
 
+        try:
+            composicao_por_cnpj = await buscar_composicao_capital_por_ano(ano)
+        except CvmClientError as exc:
+            # Não aborta a importação do lucro líquido por causa disso —
+            # composição de capital é um enriquecimento, não o dado principal.
+            logger.warning("Falha ao importar composição de capital %d: %s", ano, exc)
+            composicao_por_cnpj = {}
+
         encontrados = []
         nao_encontrados = []
+        suspeitos = []
 
         with get_connection() as conn:
             for ticker in tickers:
@@ -72,6 +81,12 @@ async def importar_lucro_historico_cvm(
                     nao_encontrados.append(ticker)
                     continue
 
+                composicao = composicao_por_cnpj.get(cnpj)
+                acoes_em_circulacao = composicao["acoes_em_circulacao"] if composicao else None
+                acoes_dado_suspeito = composicao["suspeito"] if composicao else None
+                if composicao and composicao["suspeito"]:
+                    suspeitos.append(ticker)
+
                 indicadores = Indicadores(
                     ticker=ticker,
                     nome=ticker,  # nome "de verdade" já deve estar cadastrado pela coleta via Brapi; upsert não sobrescreve com pior dado por acidente porque salvar_snapshot_indicadores faz upsert do nome também — ver observação no README sobre ordem de coleta recomendada
@@ -79,6 +94,8 @@ async def importar_lucro_historico_cvm(
                     data_referencia=date(ano, 12, 31),
                     preco_atual=0.0,  # sentinela: sem preço, só fundamentos históricos (ver docstring do módulo)
                     lucro_liquido=lucro,
+                    acoes_em_circulacao=acoes_em_circulacao,
+                    acoes_dado_suspeito=acoes_dado_suspeito,
                 )
                 salvar_snapshot_indicadores(conn, indicadores)
                 encontrados.append(ticker)
@@ -87,9 +104,11 @@ async def importar_lucro_historico_cvm(
             "sucesso": True,
             "tickers_importados": encontrados,
             "tickers_sem_dado_no_ano": nao_encontrados,
+            "tickers_com_acoes_suspeitas": suspeitos,
         }
         logger.info(
-            "DFP %d importado: %d tickers ok, %d sem dado", ano, len(encontrados), len(nao_encontrados)
+            "DFP %d importado: %d tickers ok, %d sem dado, %d com ações suspeitas",
+            ano, len(encontrados), len(nao_encontrados), len(suspeitos),
         )
 
     return {"tickers_sem_cnpj_mapeado": tickers_sem_cnpj, "por_ano": resumo_por_ano}

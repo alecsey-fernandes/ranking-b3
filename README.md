@@ -208,6 +208,35 @@ da Empresa/Composição do Capital" que a CVM passou a incluir no
 DFP/ITR mais recentemente, ou o Formulário Cadastral (FCA). Ainda não
 implementado.
 
+## Quantidade de ações em circulação (CVM — composição de capital)
+
+Confirmado em produção via diagnóstico: o arquivo
+`dfp_cia_aberta_composicao_capital_{ANO}.csv` (dentro do mesmo zip do
+DFP já usado para lucro líquido) tem as colunas
+`QT_ACAO_ORDIN_CAP_INTEGR`, `QT_ACAO_PREF_CAP_INTEGR`,
+`QT_ACAO_TOTAL_CAP_INTEGR` e `QT_ACAO_TOTAL_TESOURO`. Ações em
+circulação = capital integralizado total menos ações em tesouraria
+(que pertencem à própria empresa, não circulam no mercado).
+
+**Achado importante (anomalia de dados confirmada)**: no DFP de 2024, a
+Vale S.A. reportou 4.539.008 ações no total — o valor real é ~4,5
+**bilhões**, confirmado contra atas de assembleia de acionistas fora
+deste sistema. O mesmo padrão (fator ~1000x menor que o esperado)
+aparece em outras empresas do mesmo arquivo (Itaú Unibanco e Ambev,
+conhecidamente na casa de bilhões de ações, aparecem na casa de
+milhões) — parece um erro sistemático de escala em parte dos dados
+desse arquivo específico da CVM para 2024, não um caso isolado.
+
+Por isso, `parsear_composicao_capital_por_cnpj` (`app/data_sources/cvm_client.py`)
+marca `suspeito=True` quando o valor de ações em circulação fica abaixo
+de `LIMIAR_MINIMO_PLAUSIVEL_ACOES` (50 milhões — nenhuma empresa do
+nosso universo de teste com valor correto chega perto desse piso por
+baixo). Esse sinalizador é persistido em `Indicadores.acoes_dado_suspeito`
+e retornado no resumo de `/coleta/cvm/lucro-historico` em
+`tickers_com_acoes_suspeitas`. **Nenhuma estratégia deve usar
+`acoes_em_circulacao` quando esse campo for `True`** sem antes conferir
+o valor manualmente contra outra fonte.
+
 ## Migrando para Postgres
 
 O MVP usa `sqlite3` (stdlib) por simplicidade — zero dependência externa

@@ -222,3 +222,95 @@ async def buscar_lucro_liquido_por_ano(ano: int) -> dict[str, float]:
         raise
 
     return parsear_lucro_liquido_por_cnpj(csv_dre)
+
+
+# Colunas confirmadas em produção (ver diagnóstico em
+# /diagnostico/cvm/dfp-arquivo) no arquivo
+# dfp_cia_aberta_composicao_capital_{ANO}.csv.
+COLUNA_CNPJ_COMPOSICAO_CAPITAL = "CNPJ_CIA"
+COLUNA_VERSAO_COMPOSICAO_CAPITAL = "VERSAO"
+COLUNA_ACOES_ORDINARIAS = "QT_ACAO_ORDIN_CAP_INTEGR"
+COLUNA_ACOES_PREFERENCIAIS = "QT_ACAO_PREF_CAP_INTEGR"
+COLUNA_ACOES_TOTAL_CAPITAL = "QT_ACAO_TOTAL_CAP_INTEGR"
+COLUNA_ACOES_TOTAL_TESOURO = "QT_ACAO_TOTAL_TESOURO"
+
+# Limiar de plausibilidade: empresas de capital aberto listadas na B3
+# raramente têm menos de dezenas de milhões de ações em circulação — se
+# o valor lido for menor que isso, é sinal de erro no dado de origem.
+# Caso real confirmado em produção: no DFP de 2024, Vale S.A. reportou
+# 4.539.008 ações no total, quando o valor real é ~4,5 BILHÕES
+# (confirmado contra atas de assembleia de acionistas, fora deste
+# sistema). O mesmo padrão (fator ~1000x menor que o esperado) aparece
+# em outras empresas do mesmo arquivo (ex: Itaú Unibanco e Ambev,
+# conhecidamente na casa de bilhões de ações, aparecem na casa de
+# milhões) — parece um erro sistemático de escala em parte dos dados
+# desse arquivo específico da CVM, não um caso isolado. 50 milhões é um
+# piso seguro: nenhuma das empresas do nosso universo de teste com valor
+# correto (ex: Engie, ~815 milhões) chega perto desse piso por baixo.
+LIMIAR_MINIMO_PLAUSIVEL_ACOES = 50_000_000
+
+
+def parsear_composicao_capital_por_cnpj(conteudo_csv: str) -> dict[str, dict]:
+    """
+    Faz o parsing do CSV de composição de capital e retorna
+    {cnpj_normalizado: {...}} com a quantidade de ações em circulação
+    (capital integralizado menos ações em tesouraria, que pertencem à
+    própria empresa e não circulam no mercado) e um sinalizador
+    `suspeito` quando o valor falha num teste básico de plausibilidade.
+
+    Quando há mais de uma versão (retificação) para a mesma empresa,
+    usa a de maior VERSAO — a mais recente/corrigida.
+    """
+    leitor = csv.DictReader(io.StringIO(conteudo_csv), delimiter=";")
+    melhores_por_cnpj: dict[str, dict] = {}
+
+    for linha in leitor:
+        try:
+            cnpj = "".join(c for c in linha.get(COLUNA_CNPJ_COMPOSICAO_CAPITAL, "") if c.isdigit())
+            if not cnpj:
+                continue
+
+            versao = int(linha.get(COLUNA_VERSAO_COMPOSICAO_CAPITAL, "0") or "0")
+            existente = melhores_por_cnpj.get(cnpj)
+            if existente is not None and versao <= existente["versao"]:
+                continue  # já temos uma versão igual ou mais recente para essa empresa
+
+            ordinarias = int(linha.get(COLUNA_ACOES_ORDINARIAS, "0") or "0")
+            preferenciais = int(linha.get(COLUNA_ACOES_PREFERENCIAIS, "0") or "0")
+            total_capital = int(linha.get(COLUNA_ACOES_TOTAL_CAPITAL, "0") or "0")
+            total_tesouro = int(linha.get(COLUNA_ACOES_TOTAL_TESOURO, "0") or "0")
+
+            em_circulacao = total_capital - total_tesouro
+
+            suspeito = (
+                total_tesouro > total_capital  # inconsistência interna do próprio arquivo
+                or em_circulacao < LIMIAR_MINIMO_PLAUSIVEL_ACOES  # implausível para uma cia aberta
+            )
+
+            melhores_por_cnpj[cnpj] = {
+                "versao": versao,
+                "acoes_ordinarias": ordinarias,
+                "acoes_preferenciais": preferenciais,
+                "acoes_total_capital": total_capital,
+                "acoes_total_tesouro": total_tesouro,
+                "acoes_em_circulacao": em_circulacao,
+                "suspeito": suspeito,
+            }
+        except (ValueError, KeyError) as exc:
+            logger.warning("Linha de composição de capital ignorada por erro de parsing: %s (%s)", exc, linha)
+            continue
+
+    return melhores_por_cnpj
+
+
+async def buscar_composicao_capital_por_ano(ano: int) -> dict[str, dict]:
+    """
+    Retorna {cnpj_normalizado: {...}} com a quantidade de ações em
+    circulação de cada companhia naquele ano — ver
+    `parsear_composicao_capital_por_cnpj` para os campos e o
+    sinalizador `suspeito`. Reusa o mesmo zip anual já baixado/cacheado
+    para o lucro líquido.
+    """
+    caminho_zip = await _baixar_zip_ano(ano)
+    csv_composicao = _extrair_csv_do_zip(caminho_zip, ano, "composicao_capital")
+    return parsear_composicao_capital_por_cnpj(csv_composicao)
