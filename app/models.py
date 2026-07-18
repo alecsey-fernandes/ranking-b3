@@ -33,6 +33,7 @@ class Indicadores:
     ebit: Optional[float] = None
     ebitda: Optional[float] = None
     receita_liquida: Optional[float] = None
+    patrimonio_liquido: Optional[float] = None
 
     # Por ação
     lpa: Optional[float] = None  # Lucro por ação

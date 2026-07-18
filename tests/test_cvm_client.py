@@ -151,3 +151,29 @@ def test_composicao_capital_empresa_normal_nao_marcada_como_suspeita():
     resultado = parsear_composicao_capital_por_cnpj(csv_texto)
     assert resultado["84429695000111"]["suspeito"] is False
     assert resultado["84429695000111"]["acoes_em_circulacao"] == 4197317998 - 1780620
+
+
+from app.data_sources.cvm_client import parsear_patrimonio_liquido_por_cnpj
+
+
+def test_extrai_patrimonio_liquido_da_linha_correta():
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha("33.000.167/0001-01", "ÚLTIMO", "2.03", "Patrimônio Líquido Consolidado", "50000"),
+        _linha("33.000.167/0001-01", "PENÚLTIMO", "2.03", "Patrimônio Líquido Consolidado", "45000"),
+    ])
+    resultado = parsear_patrimonio_liquido_por_cnpj(csv_texto)
+    assert resultado["33000167000101"] == 50_000_000.0  # 50000 * 1000 (escala MIL)
+
+
+def test_patrimonio_liquido_nao_confunde_com_lucro_liquido():
+    # Mesmo arquivo com as duas contas -- cada parser deve pegar só a sua
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha("11.111.111/0001-11", "ÚLTIMO", "3.11", "Lucro/Prejuízo Consolidado do Período", "1000"),
+        _linha("11.111.111/0001-11", "ÚLTIMO", "2.03", "Patrimônio Líquido Consolidado", "20000"),
+    ])
+    lucro = parsear_lucro_liquido_por_cnpj(csv_texto)
+    patrimonio = parsear_patrimonio_liquido_por_cnpj(csv_texto)
+    assert lucro["11111111000111"] == 1_000_000.0
+    assert patrimonio["11111111000111"] == 20_000_000.0

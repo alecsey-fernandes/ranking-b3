@@ -208,6 +208,23 @@ da Empresa/Composição do Capital" que a CVM passou a incluir no
 DFP/ITR mais recentemente, ou o Formulário Cadastral (FCA). Ainda não
 implementado.
 
+## Patrimônio líquido e cálculo de LPA/VPA
+
+Com ações em circulação (acima) e patrimônio líquido (arquivo
+`dfp_cia_aberta_BPP_con_{ANO}.csv`, mesma família de formato do DRE —
+`app/data_sources/cvm_client.py:buscar_patrimonio_liquido_por_ano`), o
+job de importação (`app/jobs/importar_cvm.py`) agora calcula e persiste:
+
+- **LPA** = lucro líquido ÷ ações em circulação
+- **VPA** = patrimônio líquido ÷ ações em circulação
+
+**Importante**: LPA/VPA só são calculados quando `acoes_dado_suspeito`
+for `False` — quando o dado de ações falha no teste de plausibilidade
+(ver seção acima), os campos ficam vazios em vez de entregar um número
+~1000x inflado. Isso significa que **Graham não vai encontrar `lpa`/`vpa`
+para VALE3, ITUB4 e ABEV3 até esse dado ser corrigido/confirmado
+manualmente** — comportamento esperado, não um bug.
+
 ## Quantidade de ações em circulação (CVM — composição de capital)
 
 Confirmado em produção via diagnóstico: o arquivo

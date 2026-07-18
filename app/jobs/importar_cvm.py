@@ -19,7 +19,12 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from app.data_sources.cvm_client import CvmClientError, buscar_composicao_capital_por_ano, buscar_lucro_liquido_por_ano
+from app.data_sources.cvm_client import (
+    CvmClientError,
+    buscar_composicao_capital_por_ano,
+    buscar_lucro_liquido_por_ano,
+    buscar_patrimonio_liquido_por_ano,
+)
 from app.data_sources.ticker_mapping import TICKER_PARA_CNPJ
 from app.db.connection import get_connection, inicializar_schema
 from app.db.repository import salvar_snapshot_indicadores
@@ -66,6 +71,12 @@ async def importar_lucro_historico_cvm(
             logger.warning("Falha ao importar composição de capital %d: %s", ano, exc)
             composicao_por_cnpj = {}
 
+        try:
+            patrimonio_por_cnpj = await buscar_patrimonio_liquido_por_ano(ano)
+        except CvmClientError as exc:
+            logger.warning("Falha ao importar patrimônio líquido %d: %s", ano, exc)
+            patrimonio_por_cnpj = {}
+
         encontrados = []
         nao_encontrados = []
         suspeitos = []
@@ -87,6 +98,22 @@ async def importar_lucro_historico_cvm(
                 if composicao and composicao["suspeito"]:
                     suspeitos.append(ticker)
 
+                patrimonio_liquido = patrimonio_por_cnpj.get(cnpj)
+
+                # LPA/VPA só são calculados quando temos ações em
+                # circulação E esse valor passou no teste de
+                # plausibilidade — um `acoes_dado_suspeito=True` (ver
+                # cvm_client.py) significaria LPA/VPA inflados ~1000x,
+                # então preferimos deixar os campos vazios a entregar um
+                # número silenciosamente errado para as estratégias.
+                lpa = None
+                vpa = None
+                if acoes_em_circulacao and not acoes_dado_suspeito and acoes_em_circulacao > 0:
+                    if lucro is not None:
+                        lpa = lucro / acoes_em_circulacao
+                    if patrimonio_liquido is not None:
+                        vpa = patrimonio_liquido / acoes_em_circulacao
+
                 indicadores = Indicadores(
                     ticker=ticker,
                     nome=ticker,  # nome "de verdade" já deve estar cadastrado pela coleta via Brapi; upsert não sobrescreve com pior dado por acidente porque salvar_snapshot_indicadores faz upsert do nome também — ver observação no README sobre ordem de coleta recomendada
@@ -96,6 +123,8 @@ async def importar_lucro_historico_cvm(
                     lucro_liquido=lucro,
                     acoes_em_circulacao=acoes_em_circulacao,
                     acoes_dado_suspeito=acoes_dado_suspeito,
+                    lpa=lpa,
+                    vpa=vpa,
                 )
                 salvar_snapshot_indicadores(conn, indicadores)
                 encontrados.append(ticker)

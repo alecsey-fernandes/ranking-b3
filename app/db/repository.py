@@ -14,7 +14,7 @@ from app.models import Indicadores, RankingFinal
 
 _CAMPOS_INDICADOR = [
     "preco_atual", "valor_mercado", "valor_firma", "lucro_liquido", "ebit",
-    "ebitda", "receita_liquida", "lpa", "vpa", "p_l", "p_vp", "ev_ebit",
+    "ebitda", "receita_liquida", "patrimonio_liquido", "lpa", "vpa", "p_l", "p_vp", "ev_ebit",
     "ev_ebitda", "peg_ratio", "roe", "roic", "margem_liquida", "margem_ebit",
     "divida_liquida_ebitda", "liquidez_corrente", "dividend_yield",
     "acoes_em_circulacao", "acoes_dado_suspeito",

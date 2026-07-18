@@ -58,6 +58,17 @@ DESCRICOES_LUCRO_LIQUIDO_ACEITAS = (
 # desagregações do lucro total, não o lucro líquido da empresa como um todo.
 DESCRICOES_A_EXCLUIR = ("atribuível", "não controlad", "sócios da empresa controladora")
 
+# Conta padrão do plano de contas da CVM para "Patrimônio Líquido
+# Consolidado" na BPP (Balanço Patrimonial Passivo). Mesmo padrão de
+# filtro primário (CD_CONTA) + fallback por descrição (DS_CONTA) usado
+# para o lucro líquido — BPP/BPA seguem o mesmo formato de arquivo do
+# DRE (confirmado em produção), então a mesma lógica de parsing se aplica.
+CODIGO_CONTA_PATRIMONIO_LIQUIDO = "2.03"
+DESCRICOES_PATRIMONIO_LIQUIDO_ACEITAS = (
+    "patrimônio líquido consolidado",
+    "patrimônio líquido",
+)
+
 
 class CvmClientError(Exception):
     """Erro ao baixar ou interpretar arquivos de dados abertos da CVM."""
@@ -165,9 +176,22 @@ def _eh_linha_de_lucro_liquido(cd_conta: str, ds_conta: str) -> bool:
     return any(descricao in ds_lower for descricao in DESCRICOES_LUCRO_LIQUIDO_ACEITAS)
 
 
-def parsear_lucro_liquido_por_cnpj(conteudo_csv: str) -> dict[str, float]:
+def _eh_linha_de_patrimonio_liquido(cd_conta: str, ds_conta: str) -> bool:
+    ds_lower = ds_conta.strip().lower()
+
+    if cd_conta.strip() == CODIGO_CONTA_PATRIMONIO_LIQUIDO:
+        return True
+
+    return any(descricao in ds_lower for descricao in DESCRICOES_PATRIMONIO_LIQUIDO_ACEITAS)
+
+
+def _parsear_conta_por_cnpj(conteudo_csv: str, eh_linha_desejada) -> dict[str, float]:
     """
-    Faz o parsing de um CSV de DRE da CVM e retorna {cnpj_normalizado: lucro_liquido}.
+    Lógica compartilhada de parsing de uma conta contábil específica (ex:
+    lucro líquido na DRE, patrimônio líquido na BPP) a partir de um CSV
+    da CVM no formato padrão (DRE/BPA/BPP compartilham as mesmas
+    colunas). `eh_linha_desejada(cd_conta, ds_conta)` decide se a linha é
+    a conta procurada.
 
     Considera apenas linhas com ORDEM_EXERC == 'ÚLTIMO' — os arquivos da
     CVM também incluem o exercício anterior como comparação, e incluir
@@ -186,7 +210,7 @@ def parsear_lucro_liquido_por_cnpj(conteudo_csv: str) -> dict[str, float]:
 
             cd_conta = linha.get("CD_CONTA", "")
             ds_conta = linha.get("DS_CONTA", "")
-            if not _eh_linha_de_lucro_liquido(cd_conta, ds_conta):
+            if not eh_linha_desejada(cd_conta, ds_conta):
                 continue
 
             cnpj = "".join(c for c in linha.get("CNPJ_CIA", "") if c.isdigit())
@@ -203,6 +227,16 @@ def parsear_lucro_liquido_por_cnpj(conteudo_csv: str) -> dict[str, float]:
             continue
 
     return resultado
+
+
+def parsear_lucro_liquido_por_cnpj(conteudo_csv: str) -> dict[str, float]:
+    """Faz o parsing de um CSV de DRE da CVM e retorna {cnpj_normalizado: lucro_liquido}."""
+    return _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_lucro_liquido)
+
+
+def parsear_patrimonio_liquido_por_cnpj(conteudo_csv: str) -> dict[str, float]:
+    """Faz o parsing de um CSV de BPP da CVM e retorna {cnpj_normalizado: patrimonio_liquido}."""
+    return _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_patrimonio_liquido)
 
 
 async def buscar_lucro_liquido_por_ano(ano: int) -> dict[str, float]:
@@ -222,6 +256,17 @@ async def buscar_lucro_liquido_por_ano(ano: int) -> dict[str, float]:
         raise
 
     return parsear_lucro_liquido_por_cnpj(csv_dre)
+
+
+async def buscar_patrimonio_liquido_por_ano(ano: int) -> dict[str, float]:
+    """
+    Retorna {cnpj_normalizado: patrimonio_liquido} para todas as
+    companhias com BPP consolidado publicado naquele ano. Reusa o mesmo
+    zip anual já baixado/cacheado para o lucro líquido.
+    """
+    caminho_zip = await _baixar_zip_ano(ano)
+    csv_bpp = _extrair_csv_do_zip(caminho_zip, ano, "BPP_con")
+    return parsear_patrimonio_liquido_por_cnpj(csv_bpp)
 
 
 # Colunas confirmadas em produção (ver diagnóstico em

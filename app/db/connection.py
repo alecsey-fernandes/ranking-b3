@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS indicador_snapshot (
     ebit REAL,
     ebitda REAL,
     receita_liquida REAL,
+    patrimonio_liquido REAL,
     lpa REAL,
     vpa REAL,
     p_l REAL,
