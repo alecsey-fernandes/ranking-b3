@@ -8,14 +8,13 @@ um único CNPJ. Não há um endpoint público único e simples que faça esse
 de-para automaticamente; a fonte mais confiável é o Formulário Cadastral
 (FCA) da própria CVM ou a listagem de empresas da B3.
 
-⚠️ ATENÇÃO: os CNPJs abaixo foram preenchidos a partir de conhecimento
-geral, MAS este ambiente de desenvolvimento não tem acesso à internet
-para validar cada um contra a fonte oficial (CVM/B3) antes da entrega.
-**Confira cada CNPJ no Formulário Cadastral da CVM (dados.cvm.gov.br,
-dataset "Cias Abertas: Documentos: Formulário Cadastral") ou na página
-"Sobre a Empresa" de cada ação em b3.com.br antes de usar em produção.**
-Um CNPJ errado silenciosamente traz o histórico de lucro de OUTRA
-empresa — o tipo de erro que não dá erro em tempo de execução.
+✅ CONFIRMADOS: os CNPJs abaixo foram checados contra a coluna
+`CNPJ_Companhia` do Formulário Cadastral (FCA) da própria CVM — seção
+Valores Mobiliários, que também confirma o `Codigo_Negociacao` (ticker)
+de cada título. Todos os 10 batem com o cadastro oficial (checagem
+feita em produção, com acesso à internet — este ambiente de
+desenvolvimento não tinha esse acesso). Ao adicionar um novo ticker,
+confira do mesmo jeito antes de confiar no CNPJ.
 """
 
 from __future__ import annotations

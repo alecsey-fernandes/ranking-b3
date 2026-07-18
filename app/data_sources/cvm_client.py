@@ -36,6 +36,8 @@ import logging
 import zipfile
 from pathlib import Path
 
+from app.data_sources.csv_diagnostico import inspecionar_csv_de_texto
+
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/DFP/DADOS"
@@ -65,9 +67,12 @@ def _url_dfp_ano(ano: int) -> str:
     return f"{BASE_URL}/dfp_cia_aberta_{ano}.zip"
 
 
-async def _baixar_zip_ano(ano: int) -> bytes:
+async def _baixar_zip_ano(ano: int) -> Path:
     """Baixa o zip anual da DFP, com cache em disco (arquivos são grandes,
-    ~dezenas de MB, e não mudam com frequência dentro do mesmo ano)."""
+    ~dezenas de MB, e não mudam com frequência dentro do mesmo ano).
+    Devolve o caminho do arquivo, não o conteúdo — evita segurar o zip
+    inteiro em memória quando só precisamos listar/ler um arquivo
+    específico de dentro dele."""
     import httpx  # import local: mantém este módulo testável (parsing puro) sem exigir httpx instalado
 
     CACHE_DIR.mkdir(exist_ok=True)
@@ -75,27 +80,70 @@ async def _baixar_zip_ano(ano: int) -> bytes:
 
     if caminho_cache.exists():
         logger.info("Usando cache local para DFP %d", ano)
-        return caminho_cache.read_bytes()
+        return caminho_cache
 
     url = _url_dfp_ano(ano)
     logger.info("Baixando DFP %d da CVM: %s", ano, url)
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        try:
-            resp = await client.get(url, follow_redirects=True)
-        except httpx.HTTPError as exc:
-            raise CvmClientError(f"Falha de rede ao baixar DFP {ano}: {exc}") from exc
+    caminho_parcial = CACHE_DIR / f"dfp_cia_aberta_{ano}.zip.partial"
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream("GET", url, follow_redirects=True) as resp:
+                if resp.status_code != 200:
+                    raise CvmClientError(f"CVM retornou status {resp.status_code} para DFP {ano} (url: {url})")
+                with open(caminho_parcial, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=1024 * 1024):
+                        f.write(chunk)
+    except httpx.HTTPError as exc:
+        if caminho_parcial.exists():
+            caminho_parcial.unlink()
+        raise CvmClientError(f"Falha de rede ao baixar DFP {ano}: {exc}") from exc
 
-    if resp.status_code != 200:
-        raise CvmClientError(f"CVM retornou status {resp.status_code} para DFP {ano} (url: {url})")
-
-    caminho_cache.write_bytes(resp.content)
-    return resp.content
+    caminho_parcial.rename(caminho_cache)
+    return caminho_cache
 
 
-def _extrair_csv_do_zip(conteudo_zip: bytes, ano: int, sufixo: str) -> str:
+def listar_arquivos_do_zip(caminho_zip: Path) -> list[str]:
+    """Lista os nomes de todos os arquivos dentro do zip anual do DFP —
+    usado para descobrir o nome exato do arquivo de composição de
+    capital (quantidade de ações), que ainda não foi confirmado."""
+    with zipfile.ZipFile(caminho_zip) as zf:
+        return zf.namelist()
+
+
+def inspecionar_arquivo_do_zip(
+    caminho_zip: Path, nome_arquivo: str, cnpjs_filtro: set[str] | None = None, limite_amostra: int = 20
+) -> dict:
+    """Lê um arquivo específico de dentro do zip e devolve cabeçalho +
+    amostra de linhas, para conferência humana antes de virar parser de
+    produção — mesmo padrão usado em cvm_fca_client.py."""
+    with zipfile.ZipFile(caminho_zip) as zf:
+        if nome_arquivo not in zf.namelist():
+            raise CvmClientError(f"Arquivo {nome_arquivo} não encontrado no zip. Use listar_arquivos_dfp primeiro.")
+        # Arquivos da CVM são tradicionalmente em Latin-1 (ISO-8859-1), não UTF-8.
+        conteudo = zf.read(nome_arquivo).decode("latin-1")
+    return inspecionar_csv_de_texto(conteudo, cnpjs_filtro, limite_amostra)
+
+
+async def listar_arquivos_dfp(ano: int) -> list[str]:
+    """Baixa (ou usa cache) o zip do ano e lista os arquivos dentro dele."""
+    caminho_zip = await _baixar_zip_ano(ano)
+    return listar_arquivos_do_zip(caminho_zip)
+
+
+async def inspecionar_arquivo_dfp(
+    ano: int, nome_arquivo: str, cnpjs_filtro: set[str] | None = None, limite_amostra: int = 20
+) -> dict:
+    """Baixa (ou usa cache) o zip do ano e inspeciona um arquivo
+    específico dentro dele (cabeçalho + amostra), sem interpretar o
+    significado de nenhuma coluna ainda."""
+    caminho_zip = await _baixar_zip_ano(ano)
+    return inspecionar_arquivo_do_zip(caminho_zip, nome_arquivo, cnpjs_filtro, limite_amostra)
+
+
+def _extrair_csv_do_zip(caminho_zip: Path, ano: int, sufixo: str) -> str:
     """Extrai o texto de um CSV específico de dentro do zip anual (ex: sufixo='DRE_con')."""
     nome_arquivo = f"dfp_cia_aberta_{sufixo}_{ano}.csv"
-    with zipfile.ZipFile(io.BytesIO(conteudo_zip)) as zf:
+    with zipfile.ZipFile(caminho_zip) as zf:
         if nome_arquivo not in zf.namelist():
             disponiveis = ", ".join(zf.namelist()[:10])
             raise CvmClientError(
@@ -164,9 +212,9 @@ async def buscar_lucro_liquido_por_ano(ano: int) -> dict[str, float]:
     anual inteiro na primeira chamada do ano; chamadas seguintes usam o
     cache em disco.
     """
-    conteudo_zip = await _baixar_zip_ano(ano)
+    caminho_zip = await _baixar_zip_ano(ano)
     try:
-        csv_dre = _extrair_csv_do_zip(conteudo_zip, ano, "DRE_con")
+        csv_dre = _extrair_csv_do_zip(caminho_zip, ano, "DRE_con")
     except CvmClientError:
         # Nem toda empresa (ou nem todo ano) tem DRE consolidada disponível;
         # não deveria acontecer para o arquivo inteiro, mas se o nome do

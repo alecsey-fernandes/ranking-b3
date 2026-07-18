@@ -30,11 +30,11 @@ Arquivo esperado dentro do zip:
 
 from __future__ import annotations
 
-import csv
-import io
 import logging
 import zipfile
 from pathlib import Path
+
+from app.data_sources.csv_diagnostico import inspecionar_csv_de_texto
 
 logger = logging.getLogger(__name__)
 
@@ -107,45 +107,10 @@ def inspecionar_valor_mobiliario_de_texto(
     significado de nenhuma coluna — só expõe o que existe, para
     confirmação humana antes de virar um parser de produção.
 
-    Como não sabemos o nome exato da coluna de CNPJ neste arquivo, o
-    filtro tenta alguns nomes candidatos comuns. Se nenhuma linha bater
-    (provável sinal de que o nome da coluna é outro), cai para devolver
-    uma amostra genérica (sem filtro) em vez de um resultado vazio sem
-    explicação — junto com um aviso indicando essa situação.
+    Delega para o utilitário compartilhado em csv_diagnostico.py (também
+    usado pelo diagnóstico de arquivos do DFP, em cvm_client.py).
     """
-    leitor = csv.DictReader(io.StringIO(conteudo_csv), delimiter=";")
-    colunas = leitor.fieldnames or []
-    candidatos_coluna_cnpj = ("CNPJ_Companhia", "CNPJ_CIA", "CNPJ")
-
-    todas_linhas = list(leitor)
-
-    amostra_filtrada = []
-    if cnpjs_filtro:
-        for linha in todas_linhas:
-            valor_cnpj_bruto = next(
-                (linha[c] for c in candidatos_coluna_cnpj if c in linha and linha[c]), ""
-            )
-            cnpj_linha = "".join(c for c in valor_cnpj_bruto if c.isdigit())
-            if cnpj_linha in cnpjs_filtro:
-                amostra_filtrada.append(linha)
-                if len(amostra_filtrada) >= limite_amostra:
-                    break
-
-    if cnpjs_filtro and not amostra_filtrada:
-        return {
-            "colunas_encontradas": colunas,
-            "aviso": (
-                f"Filtro por CNPJ não encontrou nenhuma linha usando os nomes de coluna "
-                f"testados ({', '.join(candidatos_coluna_cnpj)}) — o nome real da coluna de "
-                f"CNPJ neste arquivo provavelmente é outro. Mostrando amostra genérica (sem "
-                f"filtro) para inspeção; confira 'colunas_encontradas' para o nome correto."
-            ),
-            "total_linhas_amostra": min(limite_amostra, len(todas_linhas)),
-            "amostra": todas_linhas[:limite_amostra],
-        }
-
-    amostra = amostra_filtrada if cnpjs_filtro else todas_linhas[:limite_amostra]
-    return {"colunas_encontradas": colunas, "total_linhas_amostra": len(amostra), "amostra": amostra}
+    return inspecionar_csv_de_texto(conteudo_csv, cnpjs_filtro, limite_amostra)
 
 
 async def inspecionar_valor_mobiliario(ano: int, cnpjs_filtro: set[str] | None = None) -> dict:
