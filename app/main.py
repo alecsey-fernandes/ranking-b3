@@ -9,6 +9,7 @@ from app.config import PesosEstrategias, pesos_padrao
 from app.data_sources.brapi_client import BrapiClient, BrapiClientError
 from app.data_sources.cvm_client import CvmClientError, inspecionar_arquivo_dfp, listar_arquivos_dfp
 from app.data_sources.cvm_fca_client import CvmFcaClientError, inspecionar_valor_mobiliario
+from app.data_sources.cvm_fre_client import CvmFreClientError, inspecionar_arquivo_fre, listar_arquivos_fre
 from app.data_sources.ticker_mapping import TICKER_PARA_CNPJ
 from app.db.connection import get_connection
 from app.db.repository import buscar_evolucao_ranking, buscar_historico_indicadores
@@ -79,6 +80,43 @@ async def diagnostico_dfp_arquivo(
     try:
         resultado = await inspecionar_arquivo_dfp(ano, nome_arquivo, cnpjs_filtro=cnpjs or None)
     except CvmClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return resultado
+
+
+@app.get("/diagnostico/cvm/fre-arquivos")
+async def diagnostico_fre_arquivos(
+    ano: int = Query(default=2024, description="Ano do FRE a inspecionar"),
+):
+    """
+    ⚠️ Endpoint de DIAGNÓSTICO. Lista todos os arquivos dentro do zip
+    anual do Formulário de Referência (FRE) da CVM — usado para
+    confirmar o nome exato do arquivo de distribuição de dividendos,
+    candidato à fonte de dado para a estratégia de Bazin.
+    """
+    try:
+        nomes = await listar_arquivos_fre(ano)
+    except CvmFreClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"ano": ano, "total_arquivos": len(nomes), "arquivos": sorted(nomes)}
+
+
+@app.get("/diagnostico/cvm/fre-arquivo")
+async def diagnostico_fre_arquivo(
+    ano: int = Query(default=2024, description="Ano do FRE a inspecionar"),
+    nome_arquivo: str = Query(..., description="Nome exato do arquivo dentro do zip (ver /diagnostico/cvm/fre-arquivos)"),
+    tickers: list[str] = Query(default=UNIVERSO_MVP, description="Filtra a amostra pelos CNPJs desses tickers"),
+):
+    """
+    ⚠️ Endpoint de DIAGNÓSTICO, não de produção. Inspeciona um arquivo
+    específico dentro do zip do FRE (cabeçalho real + amostra de linhas),
+    para confirmação humana antes de construirmos o parser definitivo de
+    distribuição de dividendos.
+    """
+    cnpjs = {TICKER_PARA_CNPJ[t] for t in tickers if t in TICKER_PARA_CNPJ}
+    try:
+        resultado = await inspecionar_arquivo_fre(ano, nome_arquivo, cnpjs_filtro=cnpjs or None)
+    except CvmFreClientError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return resultado
 
