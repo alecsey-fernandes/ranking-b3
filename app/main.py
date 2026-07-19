@@ -69,6 +69,7 @@ async def diagnostico_dfp_arquivo(
     ano: int = Query(default=2024, description="Ano do DFP a inspecionar"),
     nome_arquivo: str = Query(..., description="Nome exato do arquivo dentro do zip (ver /diagnostico/cvm/dfp-arquivos)"),
     tickers: list[str] = Query(default=UNIVERSO_MVP, description="Filtra a amostra pelos CNPJs desses tickers"),
+    limite_amostra: int = Query(default=20, description="Quantas linhas trazer na amostra"),
 ):
     """
     ⚠️ Endpoint de DIAGNÓSTICO, não de produção. Inspeciona um arquivo
@@ -78,7 +79,7 @@ async def diagnostico_dfp_arquivo(
     """
     cnpjs = {TICKER_PARA_CNPJ[t] for t in tickers if t in TICKER_PARA_CNPJ}
     try:
-        resultado = await inspecionar_arquivo_dfp(ano, nome_arquivo, cnpjs_filtro=cnpjs or None)
+        resultado = await inspecionar_arquivo_dfp(ano, nome_arquivo, cnpjs_filtro=cnpjs or None, limite_amostra=limite_amostra)
     except CvmClientError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return resultado
