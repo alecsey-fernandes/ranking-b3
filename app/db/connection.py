@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS indicador_snapshot (
     dividend_yield REAL,
     acoes_em_circulacao REAL,
     acoes_dado_suspeito INTEGER,
+    dividendo_por_acao REAL,
     UNIQUE(ticker, data_referencia)
 );
 

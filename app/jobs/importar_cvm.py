@@ -24,6 +24,7 @@ from app.data_sources.cvm_client import (
     buscar_composicao_capital_por_ano,
     buscar_lucro_liquido_por_ano,
     buscar_patrimonio_liquido_por_ano,
+    buscar_proventos_por_ano,
 )
 from app.data_sources.ticker_mapping import TICKER_PARA_CNPJ
 from app.db.connection import get_connection, inicializar_schema
@@ -77,6 +78,12 @@ async def importar_lucro_historico_cvm(
             logger.warning("Falha ao importar patrimônio líquido %d: %s", ano, exc)
             patrimonio_por_cnpj = {}
 
+        try:
+            proventos_por_cnpj = await buscar_proventos_por_ano(ano)
+        except CvmClientError as exc:
+            logger.warning("Falha ao importar proventos (dividendos/JCP) %d: %s", ano, exc)
+            proventos_por_cnpj = {}
+
         encontrados = []
         nao_encontrados = []
         suspeitos = []
@@ -99,6 +106,8 @@ async def importar_lucro_historico_cvm(
                     suspeitos.append(ticker)
 
                 patrimonio_liquido = patrimonio_por_cnpj.get(cnpj)
+                proventos = proventos_por_cnpj.get(cnpj)
+                proventos_total = proventos["proventos_total"] if proventos else None
 
                 # LPA/VPA só são calculados quando temos ações em
                 # circulação E esse valor passou no teste de
@@ -108,11 +117,14 @@ async def importar_lucro_historico_cvm(
                 # número silenciosamente errado para as estratégias.
                 lpa = None
                 vpa = None
+                dividendo_por_acao = None
                 if acoes_em_circulacao and not acoes_dado_suspeito and acoes_em_circulacao > 0:
                     if lucro is not None:
                         lpa = lucro / acoes_em_circulacao
                     if patrimonio_liquido is not None:
                         vpa = patrimonio_liquido / acoes_em_circulacao
+                    if proventos_total is not None:
+                        dividendo_por_acao = proventos_total / acoes_em_circulacao
 
                 indicadores = Indicadores(
                     ticker=ticker,
@@ -125,6 +137,7 @@ async def importar_lucro_historico_cvm(
                     acoes_dado_suspeito=acoes_dado_suspeito,
                     lpa=lpa,
                     vpa=vpa,
+                    dividendo_por_acao=dividendo_por_acao,
                 )
                 salvar_snapshot_indicadores(conn, indicadores)
                 encontrados.append(ticker)

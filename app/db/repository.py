@@ -17,7 +17,7 @@ _CAMPOS_INDICADOR = [
     "ebitda", "receita_liquida", "patrimonio_liquido", "lpa", "vpa", "p_l", "p_vp", "ev_ebit",
     "ev_ebitda", "peg_ratio", "roe", "roic", "margem_liquida", "margem_ebit",
     "divida_liquida_ebitda", "liquidez_corrente", "dividend_yield",
-    "acoes_em_circulacao", "acoes_dado_suspeito",
+    "acoes_em_circulacao", "acoes_dado_suspeito", "dividendo_por_acao",
 ]
 
 
@@ -155,6 +155,32 @@ def buscar_empresa(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
     cursor = conn.execute("SELECT ticker, nome, setor FROM empresa WHERE ticker = ?", (ticker,))
     row = cursor.fetchone()
     return dict(row) if row else None
+
+
+def buscar_media_dividendo_5a(conn: sqlite3.Connection, ticker: str) -> Optional[float]:
+    """
+    Calcula a média de `dividendo_por_acao` dos últimos 5 snapshots
+    anuais persistidos (vindos da importação CVM) — o valor que a
+    estratégia de Bazin (`app/strategies/bazin.py`) realmente usa
+    (`dividendo_medio_5a`), em vez do dividendo de um único ano, que
+    pode ser distorcido por um ano excepcionalmente bom ou ruim.
+
+    Retorna None se não houver nenhum ano com dividendo registrado
+    (empresa que não paga proventos, ou histórico ainda não importado).
+    """
+    cursor = conn.execute(
+        """
+        SELECT dividendo_por_acao FROM indicador_snapshot
+        WHERE ticker = ? AND dividendo_por_acao IS NOT NULL
+        ORDER BY data_referencia DESC
+        LIMIT 5
+        """,
+        (ticker,),
+    )
+    valores = [row["dividendo_por_acao"] for row in cursor.fetchall()]
+    if not valores:
+        return None
+    return sum(valores) / len(valores)
 
 
 def buscar_ultimo_preco_valido(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:

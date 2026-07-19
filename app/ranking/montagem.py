@@ -16,7 +16,12 @@ import logging
 import sqlite3
 from datetime import date
 
-from app.db.repository import buscar_empresa, buscar_ultimo_preco_valido, buscar_ultimos_fundamentos_cvm
+from app.db.repository import (
+    buscar_empresa,
+    buscar_media_dividendo_5a,
+    buscar_ultimo_preco_valido,
+    buscar_ultimos_fundamentos_cvm,
+)
 from app.models import Indicadores
 
 logger = logging.getLogger(__name__)
@@ -50,6 +55,8 @@ def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]
         nome = empresa_row["nome"] if empresa_row else ticker
         setor = empresa_row["setor"] if empresa_row else None
 
+        dividendo_medio_5a = buscar_media_dividendo_5a(conn, ticker)
+
         resultado.append(
             Indicadores(
                 ticker=ticker,
@@ -67,7 +74,7 @@ def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]
                     else None
                 ),
                 dividend_yield=fundamentos_row.get("dividend_yield"),
-                dividendo_medio_5a=fundamentos_row.get("dividendo_medio_5a"),
+                dividendo_medio_5a=dividendo_medio_5a,
                 # EV/EBIT/ROIC/ROE ainda não têm fonte gratuita integrada
                 # (ver README > "Limitações conhecidas") — ficam None, o
                 # que faz a Fórmula Mágica marcar a empresa como não

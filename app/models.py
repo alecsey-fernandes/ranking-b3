@@ -76,6 +76,15 @@ class Indicadores:
     acoes_em_circulacao: Optional[float] = None
     acoes_dado_suspeito: Optional[bool] = None
 
+    # Dividendo por ação DAQUELE ano específico (dividendos + JCP do
+    # período, dividido pelas ações em circulação) — diferente de
+    # `dividendo_medio_5a`, que é a MÉDIA de vários anos (o que a
+    # estratégia de Bazin realmente usa). A média é calculada a partir
+    # do histórico desses valores anuais — ver
+    # app/db/repository.py:buscar_media_dividendo_5a e
+    # app/ranking/montagem.py.
+    dividendo_por_acao: Optional[float] = None
+
 
 @dataclass
 class ResultadoEstrategia:

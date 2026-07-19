@@ -225,6 +225,27 @@ for `False` — quando o dado de ações falha no teste de plausibilidade
 para VALE3, ITUB4 e ABEV3 até esse dado ser corrigido/confirmado
 manualmente** — comportamento esperado, não um bug.
 
+## Dividendos e ativação do Bazin
+
+Confirmado em produção via diagnóstico: o arquivo `dfp_cia_aberta_DVA_con_{ANO}.csv`
+(Demonstração de Valor Adicionado, mesma família da DRE/BPP) tem, na
+seção "Distribuição do Valor Adicionado", as contas `7.08.04.01` (Juros
+sobre o Capital Próprio) e `7.08.04.02` (Dividendos) — somamos as duas
+como "proventos totais", prática padrão entre investidores de dividendo
+no Brasil (JCP é economicamente equivalente a dividendo).
+
+- `app/data_sources/cvm_client.py:buscar_proventos_por_ano` — busca o
+  total de proventos pagos por cada empresa naquele ano.
+- `app/jobs/importar_cvm.py` — divide pelos as ações em circulação
+  daquele ano (mesma trava de segurança de `acoes_dado_suspeito` já
+  usada para LPA/VPA) e persiste como `dividendo_por_acao` no snapshot
+  anual.
+- `app/db/repository.py:buscar_media_dividendo_5a` — calcula a média
+  dos últimos 5 anos persistidos, o valor que a Fórmula de Bazin
+  **de verdade** usa (não mais o proxy de 1 ano do yield).
+- `app/ranking/montagem.py` — injeta essa média no `Indicadores`
+  combinado usado por `/ranking/dados-gratuitos`, ativando o Bazin.
+
 ## Quantidade de ações em circulação (CVM — composição de capital)
 
 Confirmado em produção via diagnóstico: o arquivo

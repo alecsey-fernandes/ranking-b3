@@ -12,7 +12,11 @@ o arquivo real de todos os anos (a CVM já alterou nomes de coluna entre
 versões, conforme o changelog do portal).
 """
 
-from app.data_sources.cvm_client import parsear_composicao_capital_por_cnpj, parsear_lucro_liquido_por_cnpj
+from app.data_sources.cvm_client import (
+    parsear_composicao_capital_por_cnpj,
+    parsear_lucro_liquido_por_cnpj,
+    parsear_proventos_por_cnpj,
+)
 
 CABECALHO = (
     "CNPJ_CIA;DT_REFER;VERSAO;DENOM_CIA;CD_CVM;GRUPO_DFP;MOEDA;ESCALA_MOEDA;"
@@ -177,3 +181,89 @@ def test_patrimonio_liquido_nao_confunde_com_lucro_liquido():
     patrimonio = parsear_patrimonio_liquido_por_cnpj(csv_texto)
     assert lucro["11111111000111"] == 1_000_000.0
     assert patrimonio["11111111000111"] == 20_000_000.0
+
+
+from app.data_sources.cvm_client import parsear_dividendos_por_cnpj
+
+
+def test_dividendos_extrai_valor_correto_caso_real_petr4_2024():
+    """Reproduz o caso real confirmado em produção via diagnóstico:
+    PETR4 2024, CD_CONTA 7.08.04.02, DS_CONTA 'Dividendos', valor 14.091.000 (MIL)."""
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha("33.000.167/0001-01", "ÚLTIMO", "7.08.04.02", "Dividendos", "14091000"),
+    ])
+    resultado = parsear_dividendos_por_cnpj(csv_texto)
+    assert resultado["33000167000101"] == 14091000 * 1000.0
+
+
+def test_dividendos_nao_confunde_com_juros_sobre_capital_proprio():
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha("33.000.167/0001-01", "ÚLTIMO", "7.08.04.01", "Juros sobre o Capital Próprio", "22041000"),
+        _linha("33.000.167/0001-01", "ÚLTIMO", "7.08.04.02", "Dividendos", "14091000"),
+    ])
+    resultado = parsear_dividendos_por_cnpj(csv_texto)
+    assert resultado["33000167000101"] == 14091000 * 1000.0  # não 22041000, não a soma dos dois
+
+
+def test_dividendos_ignora_exercicio_anterior():
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha("33.000.167/0001-01", "PENÚLTIMO", "7.08.04.02", "Dividendos", "52918000"),
+    ])
+    resultado = parsear_dividendos_por_cnpj(csv_texto)
+    assert "33000167000101" not in resultado
+
+
+def test_dividendos_empresa_sem_distribuicao_fica_ausente():
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha("11.111.111/0001-11", "ÚLTIMO", "7.08.01", "Pessoal", "1000"),
+    ])
+    resultado = parsear_dividendos_por_cnpj(csv_texto)
+    assert "11111111000111" not in resultado
+
+
+CABECALHO_DVA = (
+    "CNPJ_CIA;DT_REFER;VERSAO;DENOM_CIA;CD_CVM;GRUPO_DFP;MOEDA;ESCALA_MOEDA;"
+    "ORDEM_EXERC;DT_INI_EXERC;DT_FIM_EXERC;CD_CONTA;DS_CONTA;VL_CONTA;ST_CONTA_FIXA"
+)
+
+
+def _linha_dva(cnpj, ordem, cd_conta, ds_conta, valor, escala="MIL"):
+    return (
+        f"{cnpj};2024-12-31;1;EMPRESA TESTE;12345;DVA;REAL;{escala};"
+        f"{ordem};2024-01-01;2024-12-31;{cd_conta};{ds_conta};{valor};S"
+    )
+
+
+def test_proventos_soma_dividendos_e_jcp():
+    csv_texto = "\n".join([
+        CABECALHO_DVA,
+        _linha_dva("33.000.167/0001-01", "ÚLTIMO", "7.08.04.01", "Juros sobre o Capital Próprio", "22041000"),
+        _linha_dva("33.000.167/0001-01", "ÚLTIMO", "7.08.04.02", "Dividendos", "14091000"),
+    ])
+    resultado = parsear_proventos_por_cnpj(csv_texto)
+    dado = resultado["33000167000101"]
+    assert dado["dividendos"] == 14091000000.0
+    assert dado["jcp"] == 22041000000.0
+    assert dado["proventos_total"] == 36132000000.0
+
+
+def test_proventos_ignora_exercicio_anterior():
+    csv_texto = "\n".join([
+        CABECALHO_DVA,
+        _linha_dva("11.111.111/0001-11", "PENÚLTIMO", "7.08.04.02", "Dividendos", "5000"),
+    ])
+    resultado = parsear_proventos_por_cnpj(csv_texto)
+    assert "11111111000111" not in resultado
+
+
+def test_proventos_empresa_sem_distribuicao_fica_zerada():
+    csv_texto = "\n".join([
+        CABECALHO_DVA,
+        _linha_dva("22.222.222/0001-22", "ÚLTIMO", "7.08.01", "Pessoal", "1000"),  # não é dividendo nem JCP
+    ])
+    resultado = parsear_proventos_por_cnpj(csv_texto)
+    assert "22222222000122" not in resultado  # nenhuma linha de provento encontrada

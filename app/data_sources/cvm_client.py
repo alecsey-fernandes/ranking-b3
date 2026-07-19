@@ -69,6 +69,14 @@ DESCRICOES_PATRIMONIO_LIQUIDO_ACEITAS = (
     "patrimônio líquido",
 )
 
+# Conta padrão do plano de contas da CVM para "Dividendos" na DVA
+# (Demonstração de Valor Adicionado, seção "Distribuição do Valor
+# Adicionado"). Confirmado em produção via diagnóstico (ver
+# /diagnostico/cvm/dfp-arquivo): CD_CONTA "7.08.04.02", DS_CONTA
+# "Dividendos", para PETR4 no DFP 2024.
+CODIGO_CONTA_DIVIDENDOS = "7.08.04.02"
+DESCRICOES_DIVIDENDOS_ACEITAS = ("dividendos",)
+
 
 class CvmClientError(Exception):
     """Erro ao baixar ou interpretar arquivos de dados abertos da CVM."""
@@ -185,6 +193,15 @@ def _eh_linha_de_patrimonio_liquido(cd_conta: str, ds_conta: str) -> bool:
     return any(descricao in ds_lower for descricao in DESCRICOES_PATRIMONIO_LIQUIDO_ACEITAS)
 
 
+def _eh_linha_de_dividendos(cd_conta: str, ds_conta: str) -> bool:
+    ds_lower = ds_conta.strip().lower()
+
+    if cd_conta.strip() == CODIGO_CONTA_DIVIDENDOS:
+        return True
+
+    return any(descricao in ds_lower for descricao in DESCRICOES_DIVIDENDOS_ACEITAS)
+
+
 def _parsear_conta_por_cnpj(conteudo_csv: str, eh_linha_desejada) -> dict[str, float]:
     """
     Lógica compartilhada de parsing de uma conta contábil específica (ex:
@@ -239,6 +256,14 @@ def parsear_patrimonio_liquido_por_cnpj(conteudo_csv: str) -> dict[str, float]:
     return _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_patrimonio_liquido)
 
 
+def parsear_dividendos_por_cnpj(conteudo_csv: str) -> dict[str, float]:
+    """Faz o parsing de um CSV de DVA da CVM e retorna {cnpj_normalizado: dividendos_pagos_no_ano}.
+    Valor total pago pela empresa, não por ação — dividir por
+    `acoes_em_circulacao` (composição de capital) para chegar no
+    dividendo por ação usado pela estratégia de Bazin."""
+    return _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_dividendos)
+
+
 async def buscar_lucro_liquido_por_ano(ano: int) -> dict[str, float]:
     """
     Retorna {cnpj_normalizado: lucro_liquido} para todas as companhias
@@ -267,6 +292,17 @@ async def buscar_patrimonio_liquido_por_ano(ano: int) -> dict[str, float]:
     caminho_zip = await _baixar_zip_ano(ano)
     csv_bpp = _extrair_csv_do_zip(caminho_zip, ano, "BPP_con")
     return parsear_patrimonio_liquido_por_cnpj(csv_bpp)
+
+
+async def buscar_dividendos_por_ano(ano: int) -> dict[str, float]:
+    """
+    Retorna {cnpj_normalizado: dividendos_pagos_no_ano} (valor total,
+    não por ação) para todas as companhias com DVA consolidada publicada
+    naquele ano. Reusa o mesmo zip anual já baixado/cacheado.
+    """
+    caminho_zip = await _baixar_zip_ano(ano)
+    csv_dva = _extrair_csv_do_zip(caminho_zip, ano, "DVA_con")
+    return parsear_dividendos_por_cnpj(csv_dva)
 
 
 # Colunas confirmadas em produção (ver diagnóstico em
@@ -359,3 +395,78 @@ async def buscar_composicao_capital_por_ano(ano: int) -> dict[str, dict]:
     caminho_zip = await _baixar_zip_ano(ano)
     csv_composicao = _extrair_csv_do_zip(caminho_zip, ano, "composicao_capital")
     return parsear_composicao_capital_por_cnpj(csv_composicao)
+
+
+# Contas confirmadas em produção (ver diagnóstico em
+# /diagnostico/cvm/dfp-arquivo, arquivo dfp_cia_aberta_DVA_con_{ANO}.csv)
+# dentro da seção "Distribuição do Valor Adicionado" (7.08) da DVA.
+# Somamos Dividendos + JCP como "proventos totais" — prática padrão entre
+# investidores de dividendo no Brasil, já que JCP é economicamente
+# equivalente a dividendo (só tem tratamento tributário diferente).
+CODIGO_CONTA_DIVIDENDOS = "7.08.04.02"
+CODIGO_CONTA_JCP = "7.08.04.01"
+DESCRICAO_DIVIDENDOS = "dividendos"
+DESCRICAO_JCP = "juros sobre o capital próprio"
+
+
+def parsear_proventos_por_cnpj(conteudo_csv: str) -> dict[str, dict]:
+    """
+    Faz o parsing do CSV de DVA (Demonstração de Valor Adicionado) e
+    retorna {cnpj_normalizado: {"dividendos": ..., "jcp": ...,
+    "proventos_total": ...}} — o valor TOTAL pago pela empresa naquele
+    ano (não por ação; a divisão por ações em circulação acontece em
+    app/jobs/importar_cvm.py, que já tem esse dado).
+
+    Considera apenas ORDEM_EXERC == 'ÚLTIMO' e respeita ESCALA_MOEDA,
+    mesmo padrão dos outros parsers deste módulo.
+    """
+    leitor = csv.DictReader(io.StringIO(conteudo_csv), delimiter=";")
+    resultado: dict[str, dict] = {}
+
+    for linha in leitor:
+        try:
+            if linha.get("ORDEM_EXERC", "").strip().upper() != "ÚLTIMO":
+                continue
+
+            cd_conta = linha.get("CD_CONTA", "").strip()
+            ds_conta = linha.get("DS_CONTA", "").strip().lower()
+
+            eh_dividendo = cd_conta == CODIGO_CONTA_DIVIDENDOS or DESCRICAO_DIVIDENDOS in ds_conta
+            eh_jcp = cd_conta == CODIGO_CONTA_JCP or DESCRICAO_JCP in ds_conta
+
+            if not (eh_dividendo or eh_jcp):
+                continue
+
+            cnpj = "".join(c for c in linha.get("CNPJ_CIA", "") if c.isdigit())
+            if not cnpj:
+                continue
+
+            valor_bruto = float(linha.get("VL_CONTA", "0").replace(",", "."))
+            escala = linha.get("ESCALA_MOEDA", "").strip().upper()
+            fator = 1000.0 if escala == "MIL" else 1.0
+            valor = valor_bruto * fator
+
+            entrada = resultado.setdefault(cnpj, {"dividendos": 0.0, "jcp": 0.0})
+            if eh_dividendo:
+                entrada["dividendos"] = valor
+            else:
+                entrada["jcp"] = valor
+        except (ValueError, KeyError) as exc:
+            logger.warning("Linha de proventos ignorada por erro de parsing: %s (%s)", exc, linha)
+            continue
+
+    for entrada in resultado.values():
+        entrada["proventos_total"] = entrada["dividendos"] + entrada["jcp"]
+
+    return resultado
+
+
+async def buscar_proventos_por_ano(ano: int) -> dict[str, dict]:
+    """
+    Retorna {cnpj_normalizado: {...}} com dividendos + JCP totais pagos
+    por cada companhia naquele ano — ver `parsear_proventos_por_cnpj`.
+    Reusa o mesmo zip anual já baixado/cacheado para o lucro líquido.
+    """
+    caminho_zip = await _baixar_zip_ano(ano)
+    csv_dva = _extrair_csv_do_zip(caminho_zip, ano, "DVA_con")
+    return parsear_proventos_por_cnpj(csv_dva)
