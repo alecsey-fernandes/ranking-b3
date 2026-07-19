@@ -254,6 +254,20 @@ e retornado no resumo de `/coleta/cvm/lucro-historico` em
 `acoes_em_circulacao` quando esse campo for `True`** sem antes conferir
 o valor manualmente contra outra fonte.
 
+## Ranking com dados 100% gratuitos (CVM + B3)
+
+`GET /ranking/dados-gratuitos` (`app/ranking/montagem.py`) combina o
+preço mais recente já coletado da B3 com os fundamentos (lucro, LPA,
+VPA) mais recentes já importados da CVM, monta um `Indicadores` por
+ticker e roda o mesmo `gerar_ranking()` de sempre — o ranking ponderado
+funcionando inteiramente sem depender do plano pago da Brapi.
+
+**Pré-requisito**: rodar `/coleta/b3/precos` e `/coleta/cvm/lucro-historico`
+antes, para os tickers desejados — sem os dois, o ticker é omitido do
+resultado (não gera erro). A Fórmula Mágica normalmente aparece como não
+aplicável a todas as empresas por enquanto, já que EV/EBIT e ROIC ainda
+não têm fonte gratuita integrada.
+
 ## Migrando para Postgres
 
 O MVP usa `sqlite3` (stdlib) por simplicidade — zero dependência externa

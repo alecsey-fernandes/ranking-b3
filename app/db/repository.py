@@ -150,6 +150,46 @@ def buscar_evolucao_ranking(conn: sqlite3.Connection, ticker: str, limite: int =
     return linhas
 
 
+def buscar_empresa(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
+    """Busca o cadastro básico (nome, setor) de uma empresa."""
+    cursor = conn.execute("SELECT ticker, nome, setor FROM empresa WHERE ticker = ?", (ticker,))
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def buscar_ultimo_preco_valido(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
+    """Snapshot mais recente com preço real (preco_atual > 0) — filtra os
+    snapshots "sentinela" da CVM (preco_atual=0.0, só fundamentos)."""
+    cursor = conn.execute(
+        """
+        SELECT * FROM indicador_snapshot
+        WHERE ticker = ? AND preco_atual > 0
+        ORDER BY data_referencia DESC
+        LIMIT 1
+        """,
+        (ticker,),
+    )
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def buscar_ultimos_fundamentos_cvm(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
+    """Snapshot mais recente com LPA calculado (vindo da importação CVM) —
+    representa o ano fiscal mais recente com fundamentos completos e
+    confiáveis (ações não suspeitas) disponíveis para esse ticker."""
+    cursor = conn.execute(
+        """
+        SELECT * FROM indicador_snapshot
+        WHERE ticker = ? AND lpa IS NOT NULL
+        ORDER BY data_referencia DESC
+        LIMIT 1
+        """,
+        (ticker,),
+    )
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+
 def listar_tickers_com_historico(conn: sqlite3.Connection) -> list[str]:
     cursor = conn.execute("SELECT DISTINCT ticker FROM indicador_snapshot ORDER BY ticker")
     return [row["ticker"] for row in cursor.fetchall()]

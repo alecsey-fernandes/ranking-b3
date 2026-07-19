@@ -15,6 +15,7 @@ from app.db.repository import buscar_evolucao_ranking, buscar_historico_indicado
 from app.jobs.atualizar_precos_b3 import atualizar_precos_b3
 from app.jobs.importar_cvm import importar_lucro_historico_cvm
 from app.jobs.scheduler import coletar_e_persistir, iniciar_scheduler
+from app.ranking.montagem import montar_indicadores_para_ranking
 from app.ranking.aggregator import gerar_ranking
 from app.strategies.bazin import BazinStrategy
 from app.strategies.graham import GrahamStrategy
@@ -125,6 +126,39 @@ async def obter_ranking(
 
     ranking = gerar_ranking(empresas, ESTRATEGIAS_MVP, pesos_padrao)
     return {"total_empresas": len(ranking), "pesos_aplicados": pesos_padrao.model_dump(), "ranking": ranking}
+
+
+@app.get("/ranking/dados-gratuitos")
+async def obter_ranking_dados_gratuitos(
+    tickers: list[str] = Query(default=UNIVERSO_MVP, description="Lista de tickers a incluir no ranking"),
+):
+    """
+    Ranking calculado inteiramente a partir de fontes gratuitas já
+    persistidas (preço via B3 + fundamentos via CVM), sem depender da
+    Brapi. Requer que `/coleta/b3/precos` e `/coleta/cvm/lucro-historico`
+    já tenham sido rodados antes para os tickers pedidos — tickers sem
+    as duas coletas feitas são omitidos do resultado (não é erro).
+
+    A Fórmula Mágica normalmente aparece como não aplicável a todas as
+    empresas — EV/EBIT e ROIC ainda não têm fonte gratuita integrada
+    (ver README).
+    """
+    with get_connection() as conn:
+        empresas = montar_indicadores_para_ranking(conn, tickers)
+
+    if not empresas:
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhum ticker com preço E fundamentos já coletados. Rode /coleta/b3/precos e /coleta/cvm/lucro-historico primeiro.",
+        )
+
+    ranking = gerar_ranking(empresas, ESTRATEGIAS_MVP, pesos_padrao)
+    return {
+        "total_empresas_com_dados_completos": len(empresas),
+        "total_no_ranking": len(ranking),
+        "pesos_aplicados": pesos_padrao.model_dump(),
+        "ranking": ranking,
+    }
 
 
 @app.post("/coleta/executar")
