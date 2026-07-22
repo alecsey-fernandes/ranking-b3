@@ -69,14 +69,6 @@ DESCRICOES_PATRIMONIO_LIQUIDO_ACEITAS = (
     "patrimônio líquido",
 )
 
-# Conta padrão do plano de contas da CVM para "Dividendos" na DVA
-# (Demonstração de Valor Adicionado, seção "Distribuição do Valor
-# Adicionado"). Confirmado em produção via diagnóstico (ver
-# /diagnostico/cvm/dfp-arquivo): CD_CONTA "7.08.04.02", DS_CONTA
-# "Dividendos", para PETR4 no DFP 2024.
-CODIGO_CONTA_DIVIDENDOS = "7.08.04.02"
-DESCRICOES_DIVIDENDOS_ACEITAS = ("dividendos",)
-
 
 class CvmClientError(Exception):
     """Erro ao baixar ou interpretar arquivos de dados abertos da CVM."""
@@ -193,15 +185,6 @@ def _eh_linha_de_patrimonio_liquido(cd_conta: str, ds_conta: str) -> bool:
     return any(descricao in ds_lower for descricao in DESCRICOES_PATRIMONIO_LIQUIDO_ACEITAS)
 
 
-def _eh_linha_de_dividendos(cd_conta: str, ds_conta: str) -> bool:
-    ds_lower = ds_conta.strip().lower()
-
-    if cd_conta.strip() == CODIGO_CONTA_DIVIDENDOS:
-        return True
-
-    return any(descricao in ds_lower for descricao in DESCRICOES_DIVIDENDOS_ACEITAS)
-
-
 def _parsear_conta_por_cnpj(conteudo_csv: str, eh_linha_desejada) -> dict[str, float]:
     """
     Lógica compartilhada de parsing de uma conta contábil específica (ex:
@@ -256,14 +239,6 @@ def parsear_patrimonio_liquido_por_cnpj(conteudo_csv: str) -> dict[str, float]:
     return _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_patrimonio_liquido)
 
 
-def parsear_dividendos_por_cnpj(conteudo_csv: str) -> dict[str, float]:
-    """Faz o parsing de um CSV de DVA da CVM e retorna {cnpj_normalizado: dividendos_pagos_no_ano}.
-    Valor total pago pela empresa, não por ação — dividir por
-    `acoes_em_circulacao` (composição de capital) para chegar no
-    dividendo por ação usado pela estratégia de Bazin."""
-    return _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_dividendos)
-
-
 async def buscar_lucro_liquido_por_ano(ano: int) -> dict[str, float]:
     """
     Retorna {cnpj_normalizado: lucro_liquido} para todas as companhias
@@ -292,17 +267,6 @@ async def buscar_patrimonio_liquido_por_ano(ano: int) -> dict[str, float]:
     caminho_zip = await _baixar_zip_ano(ano)
     csv_bpp = _extrair_csv_do_zip(caminho_zip, ano, "BPP_con")
     return parsear_patrimonio_liquido_por_cnpj(csv_bpp)
-
-
-async def buscar_dividendos_por_ano(ano: int) -> dict[str, float]:
-    """
-    Retorna {cnpj_normalizado: dividendos_pagos_no_ano} (valor total,
-    não por ação) para todas as companhias com DVA consolidada publicada
-    naquele ano. Reusa o mesmo zip anual já baixado/cacheado.
-    """
-    caminho_zip = await _baixar_zip_ano(ano)
-    csv_dva = _extrair_csv_do_zip(caminho_zip, ano, "DVA_con")
-    return parsear_dividendos_por_cnpj(csv_dva)
 
 
 # Colunas confirmadas em produção (ver diagnóstico em
@@ -470,3 +434,186 @@ async def buscar_proventos_por_ano(ano: int) -> dict[str, dict]:
     caminho_zip = await _baixar_zip_ano(ano)
     csv_dva = _extrair_csv_do_zip(caminho_zip, ano, "DVA_con")
     return parsear_proventos_por_cnpj(csv_dva)
+
+
+# ---------------------------------------------------------------------------
+# Dados para o Piotroski F-Score (app/strategies/piotroski.py)
+#
+# ⚠️ Diferente do lucro líquido, patrimônio líquido e dividendos (todos
+# confirmados em produção via diagnóstico), os códigos de conta abaixo
+# NÃO foram confirmados contra o arquivo real — este ambiente de
+# desenvolvimento não tem acesso à internet. São os códigos padrão e
+# amplamente documentados do plano de contas da CVM (mesma família de
+# arquivo que já validamos para DRE/BPP), com o mesmo mecanismo de
+# fallback por descrição (DS_CONTA) usado nos outros parsers. Ainda
+# assim, recomenda-se fortemente rodar
+# `GET /diagnostico/cvm/dfp-arquivo` numa empresa conhecida e conferir
+# os valores de Ativo Total, Passivo Circulante/Não Circulante e Caixa
+# Operacional contra o balanço publicado antes de confiar no Piotroski
+# para decisão real.
+# ---------------------------------------------------------------------------
+
+CODIGO_CONTA_ATIVO_TOTAL = "1"
+DESCRICOES_ATIVO_TOTAL_ACEITAS = ("ativo total",)
+
+CODIGO_CONTA_ATIVO_CIRCULANTE = "1.01"
+DESCRICOES_ATIVO_CIRCULANTE_ACEITAS = ("ativo circulante",)
+
+CODIGO_CONTA_PASSIVO_CIRCULANTE = "2.01"
+DESCRICOES_PASSIVO_CIRCULANTE_ACEITAS = ("passivo circulante",)
+
+CODIGO_CONTA_PASSIVO_NAO_CIRCULANTE = "2.02"
+DESCRICOES_PASSIVO_NAO_CIRCULANTE_ACEITAS = ("passivo não circulante",)
+
+CODIGO_CONTA_CAIXA_OPERACIONAL = "6.01"
+DESCRICOES_CAIXA_OPERACIONAL_ACEITAS = (
+    "caixa líquido atividades operacionais",
+    "caixa líquido das atividades operacionais",
+)
+
+CODIGO_CONTA_RECEITA_LIQUIDA = "3.01"
+DESCRICOES_RECEITA_LIQUIDA_ACEITAS = (
+    "receita de venda de bens e/ou serviços",
+    "receitas de intermediação financeira",  # instituições financeiras usam plano de contas ligeiramente diferente
+)
+
+CODIGO_CONTA_LUCRO_BRUTO = "3.03"
+DESCRICOES_LUCRO_BRUTO_ACEITAS = ("resultado bruto",)
+
+
+def _eh_linha_de_ativo_total(cd_conta: str, ds_conta: str) -> bool:
+    ds_lower = ds_conta.strip().lower()
+    if cd_conta.strip() == CODIGO_CONTA_ATIVO_TOTAL:
+        return True
+    return any(d in ds_lower for d in DESCRICOES_ATIVO_TOTAL_ACEITAS)
+
+
+def _eh_linha_de_ativo_circulante(cd_conta: str, ds_conta: str) -> bool:
+    ds_lower = ds_conta.strip().lower()
+    if cd_conta.strip() == CODIGO_CONTA_ATIVO_CIRCULANTE:
+        return True
+    return any(d in ds_lower for d in DESCRICOES_ATIVO_CIRCULANTE_ACEITAS)
+
+
+def _eh_linha_de_passivo_circulante(cd_conta: str, ds_conta: str) -> bool:
+    ds_lower = ds_conta.strip().lower()
+    if cd_conta.strip() == CODIGO_CONTA_PASSIVO_CIRCULANTE:
+        return True
+    return any(d in ds_lower for d in DESCRICOES_PASSIVO_CIRCULANTE_ACEITAS)
+
+
+def _eh_linha_de_passivo_nao_circulante(cd_conta: str, ds_conta: str) -> bool:
+    ds_lower = ds_conta.strip().lower()
+    if cd_conta.strip() == CODIGO_CONTA_PASSIVO_NAO_CIRCULANTE:
+        return True
+    return any(d in ds_lower for d in DESCRICOES_PASSIVO_NAO_CIRCULANTE_ACEITAS)
+
+
+def _eh_linha_de_caixa_operacional(cd_conta: str, ds_conta: str) -> bool:
+    ds_lower = ds_conta.strip().lower()
+    if cd_conta.strip() == CODIGO_CONTA_CAIXA_OPERACIONAL:
+        return True
+    return any(d in ds_lower for d in DESCRICOES_CAIXA_OPERACIONAL_ACEITAS)
+
+
+def _eh_linha_de_receita_liquida(cd_conta: str, ds_conta: str) -> bool:
+    ds_lower = ds_conta.strip().lower()
+    if cd_conta.strip() == CODIGO_CONTA_RECEITA_LIQUIDA:
+        return True
+    return any(d in ds_lower for d in DESCRICOES_RECEITA_LIQUIDA_ACEITAS)
+
+
+def _eh_linha_de_lucro_bruto(cd_conta: str, ds_conta: str) -> bool:
+    ds_lower = ds_conta.strip().lower()
+    if cd_conta.strip() == CODIGO_CONTA_LUCRO_BRUTO:
+        return True
+    return any(d in ds_lower for d in DESCRICOES_LUCRO_BRUTO_ACEITAS)
+
+
+def parsear_ativos_por_cnpj(conteudo_csv: str) -> dict[str, dict]:
+    """Faz o parsing de um CSV de BPA e retorna {cnpj: {"ativo_total": ..., "ativo_circulante": ...}}."""
+    totais = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_ativo_total)
+    circulantes = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_ativo_circulante)
+    cnpjs = set(totais) | set(circulantes)
+    return {
+        cnpj: {"ativo_total": totais.get(cnpj), "ativo_circulante": circulantes.get(cnpj)}
+        for cnpj in cnpjs
+    }
+
+
+def parsear_passivos_por_cnpj(conteudo_csv: str) -> dict[str, dict]:
+    """Faz o parsing de um CSV de BPP e retorna {cnpj: {"passivo_circulante": ..., "passivo_nao_circulante": ...}}."""
+    circulantes = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_passivo_circulante)
+    nao_circulantes = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_passivo_nao_circulante)
+    cnpjs = set(circulantes) | set(nao_circulantes)
+    return {
+        cnpj: {
+            "passivo_circulante": circulantes.get(cnpj),
+            "passivo_nao_circulante": nao_circulantes.get(cnpj),
+        }
+        for cnpj in cnpjs
+    }
+
+
+def parsear_caixa_operacional_por_cnpj(conteudo_csv: str) -> dict[str, float]:
+    """Faz o parsing de um CSV de DFC (método direto OU indireto — mesma
+    linha-resumo em ambos) e retorna {cnpj: caixa_liquido_operacional}."""
+    return _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_caixa_operacional)
+
+
+def parsear_receita_lucro_bruto_por_cnpj(conteudo_csv: str) -> dict[str, dict]:
+    """Faz o parsing de um CSV de DRE e retorna {cnpj: {"receita_liquida": ..., "lucro_bruto": ...}}."""
+    receitas = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_receita_liquida)
+    lucros_brutos = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_lucro_bruto)
+    cnpjs = set(receitas) | set(lucros_brutos)
+    return {
+        cnpj: {"receita_liquida": receitas.get(cnpj), "lucro_bruto": lucros_brutos.get(cnpj)}
+        for cnpj in cnpjs
+    }
+
+
+async def buscar_ativos_por_ano(ano: int) -> dict[str, dict]:
+    """Retorna {cnpj: {"ativo_total", "ativo_circulante"}} do BPA consolidado do ano."""
+    caminho_zip = await _baixar_zip_ano(ano)
+    csv_bpa = _extrair_csv_do_zip(caminho_zip, ano, "BPA_con")
+    return parsear_ativos_por_cnpj(csv_bpa)
+
+
+async def buscar_passivos_por_ano(ano: int) -> dict[str, dict]:
+    """Retorna {cnpj: {"passivo_circulante", "passivo_nao_circulante"}} do BPP consolidado do ano."""
+    caminho_zip = await _baixar_zip_ano(ano)
+    csv_bpp = _extrair_csv_do_zip(caminho_zip, ano, "BPP_con")
+    return parsear_passivos_por_cnpj(csv_bpp)
+
+
+async def buscar_caixa_operacional_por_ano(ano: int) -> dict[str, float]:
+    """
+    Retorna {cnpj: caixa_liquido_operacional} do DFC consolidado do ano.
+    Empresas usam método direto (DFC_MD) OU indireto (DFC_MI), nunca os
+    dois — tenta MD primeiro; para os CNPJs que não aparecerem lá,
+    completa com o resultado de MI.
+    """
+    caminho_zip = await _baixar_zip_ano(ano)
+
+    resultado: dict[str, float] = {}
+    try:
+        csv_md = _extrair_csv_do_zip(caminho_zip, ano, "DFC_MD_con")
+        resultado.update(parsear_caixa_operacional_por_cnpj(csv_md))
+    except CvmClientError:
+        logger.info("DFC_MD_con não encontrado para %d, seguindo só com DFC_MI_con", ano)
+
+    try:
+        csv_mi = _extrair_csv_do_zip(caminho_zip, ano, "DFC_MI_con")
+        for cnpj, valor in parsear_caixa_operacional_por_cnpj(csv_mi).items():
+            resultado.setdefault(cnpj, valor)  # MD tem prioridade quando a empresa aparece nos dois
+    except CvmClientError:
+        logger.info("DFC_MI_con não encontrado para %d", ano)
+
+    return resultado
+
+
+async def buscar_receita_lucro_bruto_por_ano(ano: int) -> dict[str, dict]:
+    """Retorna {cnpj: {"receita_liquida", "lucro_bruto"}} da DRE consolidada do ano."""
+    caminho_zip = await _baixar_zip_ano(ano)
+    csv_dre = _extrair_csv_do_zip(caminho_zip, ano, "DRE_con")
+    return parsear_receita_lucro_bruto_por_cnpj(csv_dre)

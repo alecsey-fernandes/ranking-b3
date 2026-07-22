@@ -85,6 +85,25 @@ class Indicadores:
     # app/ranking/montagem.py.
     dividendo_por_acao: Optional[float] = None
 
+    # Campos brutos para o Piotroski F-Score (app/strategies/piotroski.py)
+    ativo_total: Optional[float] = None
+    ativo_circulante: Optional[float] = None
+    passivo_circulante: Optional[float] = None
+    passivo_nao_circulante: Optional[float] = None
+    caixa_operacional: Optional[float] = None
+    lucro_bruto: Optional[float] = None
+
+    # Flags de comparação ano-a-ano para o Piotroski, pré-calculadas em
+    # app/ranking/montagem.py (compara o snapshot mais recente com o do
+    # ano anterior) — mantém a interface de Estrategia.calcular() com um
+    # único Indicadores, em vez de exigir dois objetos.
+    piotroski_roa_melhorou: Optional[bool] = None
+    piotroski_alavancagem_caiu: Optional[bool] = None
+    piotroski_liquidez_melhorou: Optional[bool] = None
+    piotroski_margem_melhorou: Optional[bool] = None
+    piotroski_giro_melhorou: Optional[bool] = None
+    piotroski_sem_diluicao: Optional[bool] = None
+
 
 @dataclass
 class ResultadoEstrategia:

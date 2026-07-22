@@ -183,48 +183,6 @@ def test_patrimonio_liquido_nao_confunde_com_lucro_liquido():
     assert patrimonio["11111111000111"] == 20_000_000.0
 
 
-from app.data_sources.cvm_client import parsear_dividendos_por_cnpj
-
-
-def test_dividendos_extrai_valor_correto_caso_real_petr4_2024():
-    """Reproduz o caso real confirmado em produção via diagnóstico:
-    PETR4 2024, CD_CONTA 7.08.04.02, DS_CONTA 'Dividendos', valor 14.091.000 (MIL)."""
-    csv_texto = "\n".join([
-        CABECALHO,
-        _linha("33.000.167/0001-01", "ÚLTIMO", "7.08.04.02", "Dividendos", "14091000"),
-    ])
-    resultado = parsear_dividendos_por_cnpj(csv_texto)
-    assert resultado["33000167000101"] == 14091000 * 1000.0
-
-
-def test_dividendos_nao_confunde_com_juros_sobre_capital_proprio():
-    csv_texto = "\n".join([
-        CABECALHO,
-        _linha("33.000.167/0001-01", "ÚLTIMO", "7.08.04.01", "Juros sobre o Capital Próprio", "22041000"),
-        _linha("33.000.167/0001-01", "ÚLTIMO", "7.08.04.02", "Dividendos", "14091000"),
-    ])
-    resultado = parsear_dividendos_por_cnpj(csv_texto)
-    assert resultado["33000167000101"] == 14091000 * 1000.0  # não 22041000, não a soma dos dois
-
-
-def test_dividendos_ignora_exercicio_anterior():
-    csv_texto = "\n".join([
-        CABECALHO,
-        _linha("33.000.167/0001-01", "PENÚLTIMO", "7.08.04.02", "Dividendos", "52918000"),
-    ])
-    resultado = parsear_dividendos_por_cnpj(csv_texto)
-    assert "33000167000101" not in resultado
-
-
-def test_dividendos_empresa_sem_distribuicao_fica_ausente():
-    csv_texto = "\n".join([
-        CABECALHO,
-        _linha("11.111.111/0001-11", "ÚLTIMO", "7.08.01", "Pessoal", "1000"),
-    ])
-    resultado = parsear_dividendos_por_cnpj(csv_texto)
-    assert "11111111000111" not in resultado
-
-
 CABECALHO_DVA = (
     "CNPJ_CIA;DT_REFER;VERSAO;DENOM_CIA;CD_CVM;GRUPO_DFP;MOEDA;ESCALA_MOEDA;"
     "ORDEM_EXERC;DT_INI_EXERC;DT_FIM_EXERC;CD_CONTA;DS_CONTA;VL_CONTA;ST_CONTA_FIXA"
@@ -267,3 +225,60 @@ def test_proventos_empresa_sem_distribuicao_fica_zerada():
     ])
     resultado = parsear_proventos_por_cnpj(csv_texto)
     assert "22222222000122" not in resultado  # nenhuma linha de provento encontrada
+
+
+from app.data_sources.cvm_client import (
+    parsear_ativos_por_cnpj,
+    parsear_caixa_operacional_por_cnpj,
+    parsear_passivos_por_cnpj,
+    parsear_receita_lucro_bruto_por_cnpj,
+)
+
+
+def _linha_generica(cnpj, ordem, cd_conta, ds_conta, valor, escala="MIL"):
+    return (
+        f"{cnpj};2024-12-31;1;EMPRESA TESTE;12345;GRUPO;REAL;{escala};"
+        f"{ordem};2024-01-01;2024-12-31;{cd_conta};{ds_conta};{valor};S"
+    )
+
+
+def test_ativos_extrai_total_e_circulante():
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha_generica("11.111.111/0001-11", "ÚLTIMO", "1", "Ativo Total", "1000000"),
+        _linha_generica("11.111.111/0001-11", "ÚLTIMO", "1.01", "Ativo Circulante", "300000"),
+    ])
+    resultado = parsear_ativos_por_cnpj(csv_texto)
+    assert resultado["11111111000111"]["ativo_total"] == 1_000_000_000.0
+    assert resultado["11111111000111"]["ativo_circulante"] == 300_000_000.0
+
+
+def test_passivos_extrai_circulante_e_nao_circulante():
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha_generica("11.111.111/0001-11", "ÚLTIMO", "2.01", "Passivo Circulante", "150000"),
+        _linha_generica("11.111.111/0001-11", "ÚLTIMO", "2.02", "Passivo Não Circulante", "400000"),
+    ])
+    resultado = parsear_passivos_por_cnpj(csv_texto)
+    assert resultado["11111111000111"]["passivo_circulante"] == 150_000_000.0
+    assert resultado["11111111000111"]["passivo_nao_circulante"] == 400_000_000.0
+
+
+def test_caixa_operacional_extrai_valor_correto():
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha_generica("11.111.111/0001-11", "ÚLTIMO", "6.01", "Caixa Líquido Atividades Operacionais", "80000"),
+    ])
+    resultado = parsear_caixa_operacional_por_cnpj(csv_texto)
+    assert resultado["11111111000111"] == 80_000_000.0
+
+
+def test_receita_lucro_bruto_extrai_ambos():
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha_generica("11.111.111/0001-11", "ÚLTIMO", "3.01", "Receita de Venda de Bens e/ou Serviços", "500000"),
+        _linha_generica("11.111.111/0001-11", "ÚLTIMO", "3.03", "Resultado Bruto", "200000"),
+    ])
+    resultado = parsear_receita_lucro_bruto_por_cnpj(csv_texto)
+    assert resultado["11111111000111"]["receita_liquida"] == 500_000_000.0
+    assert resultado["11111111000111"]["lucro_bruto"] == 200_000_000.0

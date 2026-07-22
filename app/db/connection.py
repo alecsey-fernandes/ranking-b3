@@ -58,6 +58,12 @@ CREATE TABLE IF NOT EXISTS indicador_snapshot (
     acoes_em_circulacao REAL,
     acoes_dado_suspeito INTEGER,
     dividendo_por_acao REAL,
+    ativo_total REAL,
+    ativo_circulante REAL,
+    passivo_circulante REAL,
+    passivo_nao_circulante REAL,
+    caixa_operacional REAL,
+    lucro_bruto REAL,
     UNIQUE(ticker, data_referencia)
 );
 

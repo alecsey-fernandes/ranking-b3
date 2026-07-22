@@ -18,6 +18,8 @@ _CAMPOS_INDICADOR = [
     "ev_ebitda", "peg_ratio", "roe", "roic", "margem_liquida", "margem_ebit",
     "divida_liquida_ebitda", "liquidez_corrente", "dividend_yield",
     "acoes_em_circulacao", "acoes_dado_suspeito", "dividendo_por_acao",
+    "ativo_total", "ativo_circulante", "passivo_circulante",
+    "passivo_nao_circulante", "caixa_operacional", "lucro_bruto",
 ]
 
 
@@ -211,6 +213,29 @@ def buscar_ultimos_fundamentos_cvm(conn: sqlite3.Connection, ticker: str) -> Opt
         LIMIT 1
         """,
         (ticker,),
+    )
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def buscar_fundamentos_cvm_ano_anterior(
+    conn: sqlite3.Connection, ticker: str, data_referencia_atual: date
+) -> Optional[dict]:
+    """Snapshot de fundamentos CVM (LPA calculado) mais recente ANTERIOR a
+    `data_referencia_atual` — usado para comparar ano-a-ano nos critérios
+    do Piotroski F-Score (ver app/ranking/montagem.py). Não assume que o
+    ano anterior é exatamente `data_referencia_atual - 1 ano`; pega o
+    fundamento mais recente disponível antes da data atual, já que a
+    importação CVM pode ter lacunas (ano sem dado publicado, empresa nova
+    na bolsa etc.)."""
+    cursor = conn.execute(
+        """
+        SELECT * FROM indicador_snapshot
+        WHERE ticker = ? AND lpa IS NOT NULL AND data_referencia < ?
+        ORDER BY data_referencia DESC
+        LIMIT 1
+        """,
+        (ticker, data_referencia_atual.isoformat()),
     )
     row = cursor.fetchone()
     return dict(row) if row else None

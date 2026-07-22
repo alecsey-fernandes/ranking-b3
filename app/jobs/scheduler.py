@@ -25,10 +25,11 @@ from app.ranking.aggregator import gerar_ranking
 from app.strategies.bazin import BazinStrategy
 from app.strategies.graham import GrahamStrategy
 from app.strategies.magic_formula import MagicFormulaStrategy
+from app.strategies.piotroski import PiotroskiStrategy
 
 logger = logging.getLogger(__name__)
 
-ESTRATEGIAS_ATIVAS = [GrahamStrategy(), MagicFormulaStrategy(), BazinStrategy()]
+ESTRATEGIAS_ATIVAS = [GrahamStrategy(), MagicFormulaStrategy(), BazinStrategy(), PiotroskiStrategy()]
 INTERVALO_COLETA_HORAS = 24
 
 

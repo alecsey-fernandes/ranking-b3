@@ -21,10 +21,14 @@ from datetime import date
 
 from app.data_sources.cvm_client import (
     CvmClientError,
+    buscar_ativos_por_ano,
+    buscar_caixa_operacional_por_ano,
     buscar_composicao_capital_por_ano,
     buscar_lucro_liquido_por_ano,
+    buscar_passivos_por_ano,
     buscar_patrimonio_liquido_por_ano,
     buscar_proventos_por_ano,
+    buscar_receita_lucro_bruto_por_ano,
 )
 from app.data_sources.ticker_mapping import TICKER_PARA_CNPJ
 from app.db.connection import get_connection, inicializar_schema
@@ -84,6 +88,30 @@ async def importar_lucro_historico_cvm(
             logger.warning("Falha ao importar proventos (dividendos/JCP) %d: %s", ano, exc)
             proventos_por_cnpj = {}
 
+        try:
+            ativos_por_cnpj = await buscar_ativos_por_ano(ano)
+        except CvmClientError as exc:
+            logger.warning("Falha ao importar ativos (BPA) %d: %s", ano, exc)
+            ativos_por_cnpj = {}
+
+        try:
+            passivos_por_cnpj = await buscar_passivos_por_ano(ano)
+        except CvmClientError as exc:
+            logger.warning("Falha ao importar passivos (BPP) %d: %s", ano, exc)
+            passivos_por_cnpj = {}
+
+        try:
+            caixa_operacional_por_cnpj = await buscar_caixa_operacional_por_ano(ano)
+        except CvmClientError as exc:
+            logger.warning("Falha ao importar caixa operacional (DFC) %d: %s", ano, exc)
+            caixa_operacional_por_cnpj = {}
+
+        try:
+            receita_lucro_bruto_por_cnpj = await buscar_receita_lucro_bruto_por_ano(ano)
+        except CvmClientError as exc:
+            logger.warning("Falha ao importar receita/lucro bruto (DRE) %d: %s", ano, exc)
+            receita_lucro_bruto_por_cnpj = {}
+
         encontrados = []
         nao_encontrados = []
         suspeitos = []
@@ -126,6 +154,11 @@ async def importar_lucro_historico_cvm(
                     if proventos_total is not None:
                         dividendo_por_acao = proventos_total / acoes_em_circulacao
 
+                ativos = ativos_por_cnpj.get(cnpj) or {}
+                passivos = passivos_por_cnpj.get(cnpj) or {}
+                receita_lucro_bruto = receita_lucro_bruto_por_cnpj.get(cnpj) or {}
+                caixa_operacional = caixa_operacional_por_cnpj.get(cnpj)
+
                 indicadores = Indicadores(
                     ticker=ticker,
                     nome=ticker,  # nome "de verdade" já deve estar cadastrado pela coleta via Brapi; upsert não sobrescreve com pior dado por acidente porque salvar_snapshot_indicadores faz upsert do nome também — ver observação no README sobre ordem de coleta recomendada
@@ -138,6 +171,13 @@ async def importar_lucro_historico_cvm(
                     lpa=lpa,
                     vpa=vpa,
                     dividendo_por_acao=dividendo_por_acao,
+                    ativo_total=ativos.get("ativo_total"),
+                    ativo_circulante=ativos.get("ativo_circulante"),
+                    passivo_circulante=passivos.get("passivo_circulante"),
+                    passivo_nao_circulante=passivos.get("passivo_nao_circulante"),
+                    caixa_operacional=caixa_operacional,
+                    lucro_bruto=receita_lucro_bruto.get("lucro_bruto"),
+                    receita_liquida=receita_lucro_bruto.get("receita_liquida"),
                 )
                 salvar_snapshot_indicadores(conn, indicadores)
                 encontrados.append(ticker)
