@@ -104,6 +104,13 @@ class Indicadores:
     piotroski_giro_melhorou: Optional[bool] = None
     piotroski_sem_diluicao: Optional[bool] = None
 
+    # Flags pré-calculadas para o Buffett-like (app/strategies/buffett_like.py),
+    # computadas em app/ranking/montagem.py a partir do histórico de até 5
+    # anos de fundamentos CVM — mesma lógica de "calcula fora, estratégia só
+    # combina" usada nos flags do Piotroski acima.
+    buffett_roe_consistente: Optional[bool] = None
+    buffett_margem_estavel: Optional[bool] = None
+
 
 @dataclass
 class ResultadoEstrategia:

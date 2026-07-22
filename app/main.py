@@ -19,6 +19,7 @@ from app.jobs.scheduler import coletar_e_persistir, iniciar_scheduler
 from app.ranking.montagem import montar_indicadores_para_ranking
 from app.ranking.aggregator import gerar_ranking
 from app.strategies.bazin import BazinStrategy
+from app.strategies.buffett_like import BuffettLikeStrategy
 from app.strategies.graham import GrahamStrategy
 from app.strategies.magic_formula import MagicFormulaStrategy
 from app.strategies.piotroski import PiotroskiStrategy
@@ -39,7 +40,7 @@ UNIVERSO_MVP = [
     "WEGE3", "BBAS3", "B3SA3", "RENT3", "EGIE3",
 ]
 
-ESTRATEGIAS_MVP = [GrahamStrategy(), MagicFormulaStrategy(), BazinStrategy(), PiotroskiStrategy()]
+ESTRATEGIAS_MVP = [GrahamStrategy(), MagicFormulaStrategy(), BazinStrategy(), PiotroskiStrategy(), BuffettLikeStrategy()]
 
 
 @app.on_event("startup")

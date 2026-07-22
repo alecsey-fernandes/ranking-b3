@@ -170,6 +170,7 @@ async def importar_lucro_historico_cvm(
                     acoes_dado_suspeito=acoes_dado_suspeito,
                     lpa=lpa,
                     vpa=vpa,
+                    patrimonio_liquido=patrimonio_liquido,
                     dividendo_por_acao=dividendo_por_acao,
                     ativo_total=ativos.get("ativo_total"),
                     ativo_circulante=ativos.get("ativo_circulante"),

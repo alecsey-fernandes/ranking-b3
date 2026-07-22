@@ -23,13 +23,14 @@ from app.db.connection import get_connection, inicializar_schema
 from app.db.repository import salvar_snapshot_indicadores, salvar_snapshot_ranking
 from app.ranking.aggregator import gerar_ranking
 from app.strategies.bazin import BazinStrategy
+from app.strategies.buffett_like import BuffettLikeStrategy
 from app.strategies.graham import GrahamStrategy
 from app.strategies.magic_formula import MagicFormulaStrategy
 from app.strategies.piotroski import PiotroskiStrategy
 
 logger = logging.getLogger(__name__)
 
-ESTRATEGIAS_ATIVAS = [GrahamStrategy(), MagicFormulaStrategy(), BazinStrategy(), PiotroskiStrategy()]
+ESTRATEGIAS_ATIVAS = [GrahamStrategy(), MagicFormulaStrategy(), BazinStrategy(), PiotroskiStrategy(), BuffettLikeStrategy()]
 INTERVALO_COLETA_HORAS = 24
 
 

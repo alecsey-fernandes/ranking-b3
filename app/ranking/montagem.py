@@ -15,10 +15,12 @@ from __future__ import annotations
 import logging
 import sqlite3
 from datetime import date
+from typing import Optional
 
 from app.db.repository import (
     buscar_empresa,
     buscar_fundamentos_cvm_ano_anterior,
+    buscar_historico_fundamentos_cvm,
     buscar_media_dividendo_5a,
     buscar_ultimo_preco_valido,
     buscar_ultimos_fundamentos_cvm,
@@ -106,6 +108,59 @@ def _calcular_flags_piotroski(fundamentos_atual: dict, fundamentos_anterior: dic
     return flags
 
 
+# ROE mínimo considerado "forte o suficiente para contar" num ano do
+# histórico, para fins do critério de consistência do Buffett-like.
+# 10% é um piso conservador (bem abaixo do ideal de ~15%+ que Buffett
+# buscava) — o objetivo aqui é apenas descartar anos claramente fracos,
+# não exigir excelência em todos eles.
+ROE_MINIMO_CONSISTENCIA = 0.10
+
+# Quanto a margem líquida atual pode cair em relação à média dos anos
+# anteriores e ainda ser considerada "estável" (80% da média histórica).
+MARGEM_ESTAVEL_TOLERANCIA = 0.80
+
+
+def _calcular_flags_buffett(
+    historico_fundamentos: list[dict],
+) -> tuple[Optional[bool], Optional[bool], Optional[list[float]]]:
+    """
+    A partir do histórico de fundamentos (mais recente primeiro, até 5
+    anos, vindo de `buscar_historico_fundamentos_cvm`), calcula:
+    - `roe_consistente`: True se houver pelo menos 2 anos de ROE
+      disponíveis e TODOS estiverem acima de `ROE_MINIMO_CONSISTENCIA`.
+      None se não houver histórico suficiente (menos de 2 anos) — a
+      estratégia trata None como "não atendido", sem erro.
+    - `margem_estavel`: True se a margem líquida do ano mais recente for
+      pelo menos `MARGEM_ESTAVEL_TOLERANCIA` da média dos anos
+      anteriores (não caiu bruscamente). None se não houver pelo menos
+      1 ano anterior para comparar.
+    - `roe_historico_5a`: lista de ROE calculados por ano disponível
+      (para transparência/consumo futuro), mais recente primeiro.
+    """
+    roes: list[float] = []
+    margens: list[float] = []
+    for snapshot in historico_fundamentos:
+        roe = _razao(snapshot.get("lucro_liquido"), snapshot.get("patrimonio_liquido"))
+        if roe is not None:
+            roes.append(roe)
+        margem = _razao(snapshot.get("lucro_liquido"), snapshot.get("receita_liquida"))
+        if margem is not None:
+            margens.append(margem)
+
+    roe_consistente: Optional[bool] = None
+    if len(roes) >= 2:
+        roe_consistente = all(r >= ROE_MINIMO_CONSISTENCIA for r in roes)
+
+    margem_estavel: Optional[bool] = None
+    if len(margens) >= 2:
+        margem_atual = margens[0]
+        media_anteriores = sum(margens[1:]) / len(margens[1:])
+        if media_anteriores > 0:
+            margem_estavel = margem_atual >= MARGEM_ESTAVEL_TOLERANCIA * media_anteriores
+
+    return roe_consistente, margem_estavel, (roes or None)
+
+
 def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]) -> list[Indicadores]:
     """
     Para cada ticker, busca o snapshot de preço mais recente (B3) e o
@@ -141,6 +196,11 @@ def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]
         )
         flags_piotroski = _calcular_flags_piotroski(fundamentos_row, fundamentos_anterior_row)
 
+        historico_fundamentos = buscar_historico_fundamentos_cvm(conn, ticker, anos=5)
+        roe_consistente, margem_estavel, roe_historico = _calcular_flags_buffett(historico_fundamentos)
+        roe_atual = _razao(fundamentos_row.get("lucro_liquido"), fundamentos_row.get("patrimonio_liquido"))
+        margem_liquida_atual = _razao(fundamentos_row.get("lucro_liquido"), fundamentos_row.get("receita_liquida"))
+
         resultado.append(
             Indicadores(
                 ticker=ticker,
@@ -159,7 +219,7 @@ def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]
                 ),
                 dividend_yield=fundamentos_row.get("dividend_yield"),
                 dividendo_medio_5a=dividendo_medio_5a,
-                # EV/EBIT/ROIC/ROE ainda não têm fonte gratuita integrada
+                # EV/EBIT/ROIC ainda não têm fonte gratuita integrada
                 # (ver README > "Limitações conhecidas") — ficam None, o
                 # que faz a Fórmula Mágica marcar a empresa como não
                 # elegível em vez de usar um dado ausente silenciosamente.
@@ -177,6 +237,17 @@ def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]
                 # Flags comparativas ano-a-ano do Piotroski (None quando
                 # não há ano anterior ou falta algum dado necessário).
                 **flags_piotroski,
+                # ROE/margem atuais + histórico e flags de consistência
+                # do Buffett-like (ver app/strategies/buffett_like.py).
+                # ROE aqui também serve de proxy de qualidade para a
+                # Fórmula Mágica quando ROIC não está disponível (ver
+                # app/strategies/magic_formula.py).
+                patrimonio_liquido=fundamentos_row.get("patrimonio_liquido"),
+                roe=roe_atual,
+                margem_liquida=margem_liquida_atual,
+                roe_historico_5a=roe_historico,
+                buffett_roe_consistente=roe_consistente,
+                buffett_margem_estavel=margem_estavel,
             )
         )
 

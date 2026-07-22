@@ -241,6 +241,24 @@ def buscar_fundamentos_cvm_ano_anterior(
     return dict(row) if row else None
 
 
+def buscar_historico_fundamentos_cvm(conn: sqlite3.Connection, ticker: str, anos: int = 5) -> list[dict]:
+    """Até `anos` snapshots de fundamentos CVM (LPA calculado) mais
+    recentes de um ticker, mais recente primeiro — usado para avaliar
+    consistência de ROE e margem ao longo do tempo (Buffett-like, ver
+    app/ranking/montagem.py). Inclui o ano mais recente (o mesmo que
+    `buscar_ultimos_fundamentos_cvm` retornaria)."""
+    cursor = conn.execute(
+        """
+        SELECT * FROM indicador_snapshot
+        WHERE ticker = ? AND lpa IS NOT NULL
+        ORDER BY data_referencia DESC
+        LIMIT ?
+        """,
+        (ticker, anos),
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
 def listar_tickers_com_historico(conn: sqlite3.Connection) -> list[str]:
     cursor = conn.execute("SELECT DISTINCT ticker FROM indicador_snapshot ORDER BY ticker")
     return [row["ticker"] for row in cursor.fetchall()]
