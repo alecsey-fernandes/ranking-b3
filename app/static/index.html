@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ranking B3 — Análise Fundamentalista</title>
+<style>
+  :root {
+    --bg: #0f1512;
+    --bg-card: #161f1a;
+    --bg-card-hover: #1b2620;
+    --border: #263029;
+    --text: #e8ede9;
+    --text-dim: #93a39a;
+    --accent: #3ecf8e;
+    --accent-dim: #2a8f63;
+    --accent-soft: rgba(62, 207, 142, 0.12);
+    --warn: #e0b24d;
+    --danger: #e0645a;
+    --radius: 10px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  .wrap {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 28px 20px 80px;
+  }
+
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+
+  h1 {
+    font-size: 1.4rem;
+    font-weight: 650;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+
+  h1 span { color: var(--accent); }
+
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .status-pill .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--text-dim);
+  }
+  .status-pill.ok .dot { background: var(--accent); }
+  .status-pill.bad .dot { background: var(--danger); }
+
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    margin-bottom: 18px;
+  }
+
+  .card h2 {
+    font-size: 0.95rem;
+    margin: 0 0 4px;
+    font-weight: 600;
+  }
+  .card .hint {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    margin: 0 0 14px;
+    line-height: 1.5;
+  }
+
+  label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    margin-bottom: 5px;
+  }
+
+  input[type="text"], input[type="number"] {
+    width: 100%;
+    background: #0d1512;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 9px 11px;
+    font-size: 0.88rem;
+    font-family: inherit;
+  }
+  input:focus { outline: none; border-color: var(--accent-dim); }
+
+  .row {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+  .row > div { flex: 1; min-width: 220px; }
+  .row.actions { gap: 10px; margin-top: 14px; }
+
+  button {
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    border-radius: 8px;
+    padding: 9px 16px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+    white-space: nowrap;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button:not(:disabled):hover { opacity: 0.88; }
+
+  .btn-primary { background: var(--accent); color: #06130d; }
+  .btn-secondary { background: transparent; color: var(--text); border-color: var(--border); }
+  .btn-secondary:hover { background: var(--bg-card-hover); }
+
+  .toolbelt {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  #feedback {
+    font-size: 0.8rem;
+    margin-top: 12px;
+    line-height: 1.5;
+    display: none;
+    padding: 10px 12px;
+    border-radius: 8px;
+    white-space: pre-wrap;
+  }
+  #feedback.show { display: block; }
+  #feedback.info { background: var(--accent-soft); color: var(--accent); }
+  #feedback.error { background: rgba(224,100,90,0.12); color: var(--danger); }
+  #feedback.warn { background: rgba(224,178,77,0.12); color: var(--warn); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+  thead th {
+    text-align: left;
+    color: var(--text-dim);
+    font-weight: 600;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  tbody td {
+    padding: 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--bg-card-hover); cursor: pointer; }
+
+  .pos { color: var(--text-dim); font-variant-numeric: tabular-nums; width: 28px; }
+  .ticker { font-weight: 650; letter-spacing: 0.01em; }
+  .nome { color: var(--text-dim); font-size: 0.78rem; }
+
+  .score-bar-wrap {
+    display: flex; align-items: center; gap: 8px;
+    min-width: 140px;
+  }
+  .score-bar-bg {
+    flex: 1; height: 6px; background: #0d1512; border-radius: 4px; overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .score-bar-fill { height: 100%; background: var(--accent); border-radius: 4px; }
+  .score-num { font-variant-numeric: tabular-nums; font-size: 0.82rem; width: 34px; text-align: right; }
+
+  .detail-row td {
+    background: #0d1512;
+    padding: 14px 18px;
+  }
+  .strategy-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+  }
+  .strategy-chip {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .strategy-chip .name { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; }
+  .strategy-chip .val { font-size: 1.05rem; font-weight: 650; margin-top: 2px; }
+  .strategy-chip.missing .val { color: var(--text-dim); font-weight: 400; font-size: 0.82rem; }
+
+  .empty-state {
+    text-align: center;
+    padding: 50px 20px;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+  }
+  .empty-state b { color: var(--text); }
+
+  .spinner {
+    width: 13px; height: 13px;
+    border: 2px solid rgba(255,255,255,0.25);
+    border-top-color: currentColor;
+    border-radius: 50%;
+    display: inline-block;
+    animation: spin 0.7s linear infinite;
+    vertical-align: -2px;
+    margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  footer {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    margin-top: 30px;
+  }
+
+  details.pesos summary {
+    cursor: pointer; color: var(--text-dim); font-size: 0.78rem; margin-bottom: 10px;
+  }
+  .pesos-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .peso-item {
+    font-size: 0.78rem; color: var(--text-dim);
+    display: flex; justify-content: space-between;
+    background: #0d1512; border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 9px;
+  }
+  .peso-item b { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1>Ranking <span>B3</span></h1>
+      <div class="subtitle">Análise fundamentalista combinando múltiplas estratégias · dados 100% gratuitos (CVM + B3)</div>
+    </div>
+    <span class="status-pill" id="statusPill"><span class="dot"></span><span id="statusText">verificando...</span></span>
+  </header>
+
+  <div class="card">
+    <h2>Empresas</h2>
+    <p class="hint">Tickers separados por vírgula (ex: PETR4, VALE3, WEGE3). Deixe como está para usar a lista padrão.</p>
+    <div class="row">
+      <div style="flex: 3;">
+        <label for="tickers">Tickers</label>
+        <input type="text" id="tickers" value="PETR4, VALE3, ITUB4, BBDC4, ABEV3, WEGE3, BBAS3, B3SA3, RENT3, EGIE3">
+      </div>
+      <div>
+        <button class="btn-primary" id="btnRanking" style="width:100%">Gerar ranking</button>
+      </div>
+    </div>
+
+    <div id="feedback"></div>
+
+    <details class="pesos" id="pesosBox" style="margin-top:14px; display:none;">
+      <summary>Pesos usados neste ranking</summary>
+      <div class="pesos-grid" id="pesosGrid"></div>
+    </details>
+  </div>
+
+  <div class="card" id="resultCard" style="display:none;">
+    <h2>Resultado</h2>
+    <p class="hint" id="resultHint"></p>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Empresa</th>
+          <th>Setor</th>
+          <th>Score final</th>
+        </tr>
+      </thead>
+      <tbody id="rankingBody"></tbody>
+    </table>
+  </div>
+
+  <div class="card" id="emptyCard">
+    <div class="empty-state">
+      Nenhum ranking gerado ainda. Clique em <b>Gerar ranking</b> acima.<br>
+      Se for a primeira vez usando esses tickers, colete os dados primeiro (abaixo).
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Coleta de dados</h2>
+    <p class="hint">
+      Só precisa rodar isso quando adicionar um ticker novo, ou para atualizar preços/fundamentos.
+      A primeira importação de fundamentos por ano pode demorar bastante (baixa um arquivo grande da CVM
+      com todas as empresas do Brasil) — as próximas usam cache e são rápidas.
+    </p>
+    <div class="row">
+      <div>
+        <label for="anos">Anos a importar (fundamentos CVM)</label>
+        <input type="text" id="anos" value="2021, 2022, 2023, 2024, 2025">
+      </div>
+    </div>
+    <div class="row actions">
+      <button class="btn-secondary" id="btnPrecos">Atualizar preços (B3)</button>
+      <button class="btn-secondary" id="btnFundamentos">Importar fundamentos (CVM)</button>
+      <button class="btn-secondary" id="btnCompleto">Rodar os dois agora</button>
+    </div>
+    <div id="coletaFeedback"></div>
+  </div>
+
+  <footer>Ranking B3 · estratégias: Graham, Bazin, Piotroski F-Score, Buffett-like, PEG/Lynch, Fórmula Mágica</footer>
+</div>
+
+<script>
+const NOMES_ESTRATEGIA = {
+  graham: "Graham",
+  bazin: "Bazin",
+  piotroski: "Piotroski F-Score",
+  buffett_like: "Buffett-like",
+  peg_lynch: "PEG / Lynch",
+  magic_formula: "Fórmula Mágica",
+};
+
+const $ = (id) => document.getElementById(id);
+
+function parseTickers(raw) {
+  return raw.split(",").map(t => t.trim().toUpperCase()).filter(Boolean);
+}
+
+function parseAnos(raw) {
+  return raw.split(",").map(a => parseInt(a.trim(), 10)).filter(a => !isNaN(a));
+}
+
+function qs(tickers) {
+  return tickers.map(t => `tickers=${encodeURIComponent(t)}`).join("&");
+}
+
+function showFeedback(el, type, msg) {
+  el.className = "show " + type;
+  el.textContent = msg;
+}
+
+function hideFeedback(el) {
+  el.className = "";
+  el.textContent = "";
+}
+
+function setBusy(btn, busy, label) {
+  btn.disabled = busy;
+  if (busy) {
+    btn.dataset.originalLabel = btn.dataset.originalLabel || btn.textContent;
+    btn.innerHTML = `<span class="spinner"></span>${label || "processando..."}`;
+  } else {
+    btn.textContent = btn.dataset.originalLabel || btn.textContent;
+  }
+}
+
+async function checarSaude() {
+  const pill = $("statusPill");
+  const text = $("statusText");
+  try {
+    const r = await fetch("/health");
+    if (!r.ok) throw new Error();
+    pill.className = "status-pill ok";
+    text.textContent = "API online";
+  } catch {
+    pill.className = "status-pill bad";
+    text.textContent = "API indisponível";
+  }
+}
+
+function renderPesos(pesos) {
+  const grid = $("pesosGrid");
+  grid.innerHTML = "";
+  Object.entries(pesos).forEach(([nome, valor]) => {
+    const div = document.createElement("div");
+    div.className = "peso-item";
+    div.innerHTML = `<span>${NOMES_ESTRATEGIA[nome] || nome}</span><b>${valor}%</b>`;
+    grid.appendChild(div);
+  });
+  $("pesosBox").style.display = "block";
+}
+
+function renderRanking(ranking) {
+  const body = $("rankingBody");
+  body.innerHTML = "";
+
+  ranking.forEach(linha => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="pos">${linha.posicao}</td>
+      <td>
+        <div class="ticker">${linha.ticker}</div>
+        <div class="nome">${linha.nome || ""}</div>
+      </td>
+      <td class="nome">${linha.setor || "—"}</td>
+      <td>
+        <div class="score-bar-wrap">
+          <div class="score-bar-bg"><div class="score-bar-fill" style="width:${linha.score_final}%"></div></div>
+          <div class="score-num">${linha.score_final.toFixed(1)}</div>
+        </div>
+      </td>
+    `;
+
+    const detailTr = document.createElement("tr");
+    detailTr.className = "detail-row";
+    detailTr.style.display = "none";
+    const chips = Object.keys(NOMES_ESTRATEGIA).map(key => {
+      const val = linha.scores_por_estrategia ? linha.scores_por_estrategia[key] : undefined;
+      if (val === undefined || val === null) {
+        return `<div class="strategy-chip missing"><div class="name">${NOMES_ESTRATEGIA[key]}</div><div class="val">não aplicável</div></div>`;
+      }
+      return `<div class="strategy-chip"><div class="name">${NOMES_ESTRATEGIA[key]}</div><div class="val">${val.toFixed(1)}</div></div>`;
+    }).join("");
+    const detailTd = document.createElement("td");
+    detailTd.colSpan = 4;
+    detailTd.innerHTML = `<div class="strategy-grid">${chips}</div>`;
+    detailTr.appendChild(detailTd);
+
+    tr.addEventListener("click", () => {
+      detailTr.style.display = detailTr.style.display === "none" ? "table-row" : "none";
+    });
+
+    body.appendChild(tr);
+    body.appendChild(detailTr);
+  });
+}
+
+async function gerarRanking() {
+  const btn = $("btnRanking");
+  const fb = $("feedback");
+  const tickers = parseTickers($("tickers").value);
+
+  if (tickers.length === 0) {
+    showFeedback(fb, "error", "Informe pelo menos um ticker.");
+    return;
+  }
+
+  hideFeedback(fb);
+  setBusy(btn, true, "gerando...");
+  $("resultCard").style.display = "none";
+  $("emptyCard").style.display = "none";
+
+  try {
+    const r = await fetch(`/ranking/dados-gratuitos?${qs(tickers)}`);
+    const data = await r.json();
+
+    if (!r.ok) {
+      showFeedback(fb, "warn", (data.detail || "Não foi possível gerar o ranking.") +
+        "\n\nSe esses tickers são novos, colete os dados na seção abaixo primeiro.");
+      $("emptyCard").style.display = "block";
+      return;
+    }
+
+    if (!data.ranking || data.ranking.length === 0) {
+      showFeedback(fb, "warn",
+        `${data.total_empresas_com_dados_completos} empresa(s) com dados completos, mas nenhuma entrou no ranking ` +
+        `(universo pequeno demais para calcular percentil, ou nenhuma elegível em qualquer estratégia).`);
+      $("emptyCard").style.display = "block";
+      return;
+    }
+
+    renderPesos(data.pesos_aplicados);
+    $("resultHint").textContent =
+      `${data.total_no_ranking} de ${data.total_empresas_com_dados_completos} empresa(s) com dados completos entraram no ranking. Clique numa linha para ver o detalhe por estratégia.`;
+    renderRanking(data.ranking);
+    $("resultCard").style.display = "block";
+
+  } catch (err) {
+    showFeedback(fb, "error", "Erro de conexão com a API: " + err.message);
+    $("emptyCard").style.display = "block";
+  } finally {
+    setBusy(btn, false);
+  }
+}
+
+async function rodarColeta({ precos, fundamentos }) {
+  const fb = $("coletaFeedback");
+  const tickers = parseTickers($("tickers").value);
+  const anos = parseAnos($("anos").value);
+
+  if (tickers.length === 0) {
+    showFeedback(fb, "error", "Informe pelo menos um ticker no campo acima.");
+    return;
+  }
+
+  hideFeedback(fb);
+  const mensagens = [];
+
+  try {
+    if (precos) {
+      setBusy($("btnPrecos"), true, "buscando preços...");
+      const r = await fetch(`/coleta/b3/precos?${qs(tickers)}`, { method: "POST" });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || "falha ao atualizar preços");
+      mensagens.push(`Preços: ${(data.atualizados || []).length} ticker(s) atualizados.`);
+      if (data.sem_cotacao && data.sem_cotacao.length > 0) {
+        mensagens.push(`⚠ Sem cotação encontrada: ${data.sem_cotacao.join(", ")}`);
+      }
+    }
+
+    if (fundamentos) {
+      if (anos.length === 0) {
+        throw new Error("Informe pelo menos um ano válido.");
+      }
+      setBusy($("btnFundamentos"), true, "importando da CVM (pode demorar)...");
+      const anosQs = anos.map(a => `anos=${a}`).join("&");
+      const r = await fetch(`/coleta/cvm/lucro-historico?${qs(tickers)}&${anosQs}`, { method: "POST" });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || "falha ao importar fundamentos");
+      mensagens.push(`Fundamentos: importação da CVM concluída para ${anos.length} ano(s).`);
+      if (data.tickers_sem_cnpj_mapeado && data.tickers_sem_cnpj_mapeado.length > 0) {
+        mensagens.push(`⚠ Sem CNPJ mapeado (ignorados): ${data.tickers_sem_cnpj_mapeado.join(", ")}`);
+      }
+    }
+
+    showFeedback(fb, "info", mensagens.join("\n"));
+  } catch (err) {
+    showFeedback(fb, "error", "Erro: " + err.message);
+  } finally {
+    setBusy($("btnPrecos"), false);
+    setBusy($("btnFundamentos"), false);
+    setBusy($("btnCompleto"), false);
+  }
+}
+
+$("btnRanking").addEventListener("click", gerarRanking);
+$("btnPrecos").addEventListener("click", () => rodarColeta({ precos: true, fundamentos: false }));
+$("btnFundamentos").addEventListener("click", () => rodarColeta({ precos: false, fundamentos: true }));
+$("btnCompleto").addEventListener("click", () => rodarColeta({ precos: true, fundamentos: true }));
+
+checarSaude();
+</script>
+</body>
+</html>

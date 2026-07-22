@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from app.analysis.consistencia import calcular_consistencia_lucro
 from app.config import PesosEstrategias, pesos_padrao
@@ -32,6 +34,22 @@ app = FastAPI(
     description="Ranking de empresas da B3 combinando múltiplas estratégias fundamentalistas em média ponderada, com histórico persistido.",
     version="0.2.0",
 )
+
+# Dashboard web (app/static/index.html) — HTML/CSS/JS puro, autocontido
+# num único arquivo (sem CSS/JS separados, sem build step), consumindo os
+# mesmos endpoints da API na mesma origem (sem precisar de CORS). Serve na
+# raiz para abrir direto pela URL do Railway, sem interferir em /docs
+# (Swagger) nem nos demais endpoints. `directory` é resolvido a partir
+# deste arquivo (não do diretório de trabalho), para funcionar igual
+# rodando localmente ou no Railway independente de onde o processo é
+# iniciado.
+_DIR_STATIC = Path(__file__).parent / "static"
+
+
+@app.get("/", include_in_schema=False)
+async def dashboard():
+    return FileResponse(_DIR_STATIC / "index.html")
+
 
 # Universo padrão do MVP: lista pequena e fixa para validar o pipeline.
 # Em produção isso vem de uma tabela `empresas` populada a partir da
