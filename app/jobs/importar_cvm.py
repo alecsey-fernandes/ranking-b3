@@ -179,6 +179,12 @@ async def importar_lucro_historico_cvm(
                     caixa_operacional=caixa_operacional,
                     lucro_bruto=receita_lucro_bruto.get("lucro_bruto"),
                     receita_liquida=receita_lucro_bruto.get("receita_liquida"),
+                    # Fórmula Mágica (ver app/strategies/magic_formula.py e
+                    # a ressalva sobre plano de contas divergente em
+                    # cvm_client.py, especialmente para dívida financeira).
+                    ebit=receita_lucro_bruto.get("ebit"),
+                    caixa_e_equivalentes=ativos.get("caixa_e_equivalentes"),
+                    divida_financeira=passivos.get("divida_financeira"),
                 )
                 salvar_snapshot_indicadores(conn, indicadores)
                 encontrados.append(ticker)

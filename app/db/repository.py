@@ -20,6 +20,7 @@ _CAMPOS_INDICADOR = [
     "acoes_em_circulacao", "acoes_dado_suspeito", "dividendo_por_acao",
     "ativo_total", "ativo_circulante", "passivo_circulante",
     "passivo_nao_circulante", "caixa_operacional", "lucro_bruto",
+    "caixa_e_equivalentes", "divida_financeira",
 ]
 
 

@@ -93,6 +93,16 @@ class Indicadores:
     caixa_operacional: Optional[float] = None
     lucro_bruto: Optional[float] = None
 
+    # Campos brutos adicionais para a Fórmula Mágica
+    # (app/strategies/magic_formula.py) — usados para montar EV (Enterprise
+    # Value) e capital investido (para ROIC) em app/ranking/montagem.py.
+    # `caixa_e_equivalentes` é o saldo de caixa e equivalentes de caixa (não
+    # confundir com `caixa_operacional`, que é fluxo de caixa operacional do
+    # período, não saldo). `divida_financeira` é Empréstimos e Financiamentos
+    # (circulante + não circulante somados na origem, ver cvm_client.py).
+    caixa_e_equivalentes: Optional[float] = None
+    divida_financeira: Optional[float] = None
+
     # Flags de comparação ano-a-ano para o Piotroski, pré-calculadas em
     # app/ranking/montagem.py (compara o snapshot mais recente com o do
     # ano anterior) — mantém a interface de Estrategia.calcular() com um

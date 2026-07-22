@@ -199,6 +199,51 @@ def _calcular_crescimento_lucro_pct(historico_fundamentos: list[dict]) -> Option
     return cagr * 100
 
 
+def _calcular_ev_e_roic(
+    preco_atual: float,
+    acoes_em_circulacao: float | None,
+    acoes_dado_suspeito: bool | None,
+    ebit: float | None,
+    caixa_e_equivalentes: float | None,
+    divida_financeira: float | None,
+    patrimonio_liquido: float | None,
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    Calcula, para a Fórmula Mágica (app/strategies/magic_formula.py):
+    - `valor_mercado` = preço atual × ações em circulação
+    - `valor_firma` (EV) = valor de mercado + dívida financeira - caixa e
+      equivalentes
+    - `roic` = EBIT / capital investido, onde capital investido = dívida
+      financeira + patrimônio líquido - caixa e equivalentes (aproximação
+      pré-imposto — mesma base de EBIT usada no earnings yield da
+      estratégia, para as duas dimensões ficarem na mesma escala)
+
+    Cada um só é calculado quando TODOS os dados que ele precisa estão
+    disponíveis (e `acoes_em_circulacao` não está marcado como suspeito —
+    ver `acoes_dado_suspeito` em models.py); do contrário fica None, em vez
+    de assumir um valor (ex: dívida ou caixa "zero" quando na verdade é
+    "não encontrado na fonte") que poderia dar um EV/ROIC silenciosamente
+    errado — mesmo princípio já usado nos outros campos calculados deste
+    módulo.
+    """
+    if not acoes_em_circulacao or acoes_dado_suspeito or acoes_em_circulacao <= 0 or not preco_atual:
+        return None, None, None
+
+    valor_mercado = preco_atual * acoes_em_circulacao
+
+    if caixa_e_equivalentes is None or divida_financeira is None:
+        return valor_mercado, None, None
+
+    valor_firma = valor_mercado + divida_financeira - caixa_e_equivalentes
+
+    roic = None
+    if ebit is not None and patrimonio_liquido is not None:
+        capital_investido = divida_financeira + patrimonio_liquido - caixa_e_equivalentes
+        roic = _razao(ebit, capital_investido)
+
+    return valor_mercado, valor_firma, roic
+
+
 def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]) -> list[Indicadores]:
     """
     Para cada ticker, busca o snapshot de preço mais recente (B3) e o
@@ -240,6 +285,22 @@ def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]
         roe_atual = _razao(fundamentos_row.get("lucro_liquido"), fundamentos_row.get("patrimonio_liquido"))
         margem_liquida_atual = _razao(fundamentos_row.get("lucro_liquido"), fundamentos_row.get("receita_liquida"))
 
+        acoes_dado_suspeito_bool = (
+            bool(fundamentos_row["acoes_dado_suspeito"])
+            if fundamentos_row.get("acoes_dado_suspeito") is not None
+            else None
+        )
+        valor_mercado, valor_firma, roic = _calcular_ev_e_roic(
+            preco_atual=preco_row["preco_atual"],
+            acoes_em_circulacao=fundamentos_row.get("acoes_em_circulacao"),
+            acoes_dado_suspeito=acoes_dado_suspeito_bool,
+            ebit=fundamentos_row.get("ebit"),
+            caixa_e_equivalentes=fundamentos_row.get("caixa_e_equivalentes"),
+            divida_financeira=fundamentos_row.get("divida_financeira"),
+            patrimonio_liquido=fundamentos_row.get("patrimonio_liquido"),
+        )
+        margem_ebit_atual = _razao(fundamentos_row.get("ebit"), fundamentos_row.get("receita_liquida"))
+
         resultado.append(
             Indicadores(
                 ticker=ticker,
@@ -251,17 +312,16 @@ def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]
                 lpa=fundamentos_row.get("lpa"),
                 vpa=fundamentos_row.get("vpa"),
                 acoes_em_circulacao=fundamentos_row.get("acoes_em_circulacao"),
-                acoes_dado_suspeito=(
-                    bool(fundamentos_row["acoes_dado_suspeito"])
-                    if fundamentos_row.get("acoes_dado_suspeito") is not None
-                    else None
-                ),
+                acoes_dado_suspeito=acoes_dado_suspeito_bool,
                 dividend_yield=fundamentos_row.get("dividend_yield"),
                 dividendo_medio_5a=dividendo_medio_5a,
-                # EV/EBIT/ROIC ainda não têm fonte gratuita integrada
-                # (ver README > "Limitações conhecidas") — ficam None, o
-                # que faz a Fórmula Mágica marcar a empresa como não
-                # elegível em vez de usar um dado ausente silenciosamente.
+                # EV, EBIT e ROIC calculados abaixo/acima a partir de dados
+                # CVM (ver _calcular_ev_e_roic) — ficam None quando faltar
+                # algum insumo (dívida financeira e caixa em particular são
+                # os mais sujeitos a plano de contas divergente, ver
+                # ressalva em cvm_client.py), o que faz a Fórmula Mágica
+                # marcar a empresa como não elegível em vez de usar um
+                # dado ausente silenciosamente.
                 # Campos brutos do Piotroski (repassados direto do
                 # snapshot CVM mais recente, para a estratégia usar nos
                 # 3 critérios não-comparativos: lucro/caixa positivos e
@@ -294,6 +354,14 @@ def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]
                 lucro_liquido_ano_anterior=(
                     fundamentos_anterior_row.get("lucro_liquido") if fundamentos_anterior_row else None
                 ),
+                # Fórmula Mágica (ver app/strategies/magic_formula.py).
+                ebit=fundamentos_row.get("ebit"),
+                caixa_e_equivalentes=fundamentos_row.get("caixa_e_equivalentes"),
+                divida_financeira=fundamentos_row.get("divida_financeira"),
+                valor_mercado=valor_mercado,
+                valor_firma=valor_firma,
+                roic=roic,
+                margem_ebit=margem_ebit_atual,
             )
         )
 

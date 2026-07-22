@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS indicador_snapshot (
     passivo_nao_circulante REAL,
     caixa_operacional REAL,
     lucro_bruto REAL,
+    caixa_e_equivalentes REAL,
+    divida_financeira REAL,
     UNIQUE(ticker, data_referencia)
 );
 
@@ -89,6 +91,29 @@ CREATE INDEX IF NOT EXISTS idx_ranking_ticker_data
 def inicializar_schema() -> None:
     with get_connection() as conn:
         conn.executescript(SCHEMA)
+        _migrar_colunas_novas(conn)
+
+
+# `CREATE TABLE IF NOT EXISTS` acima só cria a tabela na primeira vez — não
+# adiciona colunas a uma tabela que já existe (o caso do banco em produção
+# no Railway, criado antes destas colunas existirem). Esta função cobre
+# esse caso de forma idempotente: tenta adicionar cada coluna nova e ignora
+# o erro "coluna já existe" quando ela já foi adicionada numa execução
+# anterior. Toda vez que um campo novo for adicionado a `indicador_snapshot`
+# depois do primeiro deploy, a coluna correspondente deve entrar aqui.
+_COLUNAS_NOVAS_INDICADOR_SNAPSHOT = [
+    ("caixa_e_equivalentes", "REAL"),
+    ("divida_financeira", "REAL"),
+]
+
+
+def _migrar_colunas_novas(conn: sqlite3.Connection) -> None:
+    for coluna, tipo in _COLUNAS_NOVAS_INDICADOR_SNAPSHOT:
+        try:
+            conn.execute(f"ALTER TABLE indicador_snapshot ADD COLUMN {coluna} {tipo}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
 
 
 @contextmanager

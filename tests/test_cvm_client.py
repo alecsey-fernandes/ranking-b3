@@ -282,3 +282,44 @@ def test_receita_lucro_bruto_extrai_ambos():
     resultado = parsear_receita_lucro_bruto_por_cnpj(csv_texto)
     assert resultado["11111111000111"]["receita_liquida"] == 500_000_000.0
     assert resultado["11111111000111"]["lucro_bruto"] == 200_000_000.0
+
+
+def test_ativos_extrai_caixa_e_equivalentes():
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha_generica("11.111.111/0001-11", "ÚLTIMO", "1.01.01", "Caixa e Equivalentes de Caixa", "50000"),
+    ])
+    resultado = parsear_ativos_por_cnpj(csv_texto)
+    assert resultado["11111111000111"]["caixa_e_equivalentes"] == 50_000_000.0
+
+
+def test_passivos_soma_divida_financeira_circulante_e_nao_circulante():
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha_generica("11.111.111/0001-11", "ÚLTIMO", "2.01.04", "Empréstimos e Financiamentos", "30000"),
+        _linha_generica("11.111.111/0001-11", "ÚLTIMO", "2.02.01", "Empréstimos e Financiamentos", "90000"),
+    ])
+    resultado = parsear_passivos_por_cnpj(csv_texto)
+    assert resultado["11111111000111"]["divida_financeira"] == 120_000_000.0
+
+
+def test_passivos_sem_linha_de_divida_financeira_fica_none_nao_zero():
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha_generica("22.222.222/0001-22", "ÚLTIMO", "2.01", "Passivo Circulante", "100000"),
+        _linha_generica("22.222.222/0001-22", "ÚLTIMO", "2.02", "Passivo Não Circulante", "200000"),
+    ])
+    resultado = parsear_passivos_por_cnpj(csv_texto)
+    assert resultado["22222222000122"]["divida_financeira"] is None
+
+
+def test_dre_extrai_ebit():
+    csv_texto = "\n".join([
+        CABECALHO,
+        _linha_generica(
+            "11.111.111/0001-11", "ÚLTIMO", "3.05",
+            "Resultado Antes do Resultado Financeiro e dos Tributos", "120000",
+        ),
+    ])
+    resultado = parsear_receita_lucro_bruto_por_cnpj(csv_texto)
+    assert resultado["11111111000111"]["ebit"] == 120_000_000.0

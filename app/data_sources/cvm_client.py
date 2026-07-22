@@ -480,6 +480,40 @@ DESCRICOES_RECEITA_LIQUIDA_ACEITAS = (
 CODIGO_CONTA_LUCRO_BRUTO = "3.03"
 DESCRICOES_LUCRO_BRUTO_ACEITAS = ("resultado bruto",)
 
+# ---------------------------------------------------------------------------
+# Dados para a Fórmula Mágica (app/strategies/magic_formula.py): EBIT, caixa
+# e equivalentes, e dívida financeira — para montar Enterprise Value (EV) e
+# capital investido (para ROIC).
+#
+# ⚠️ Mesma ressalva dos dados do Piotroski acima: códigos padrão do plano de
+# contas da CVM, NÃO confirmados contra o arquivo real (sem acesso à
+# internet neste ambiente). Os dois primeiros (EBIT, caixa e equivalentes)
+# são contas-resumo relativamente padronizadas entre empresas não
+# financeiras. "Empréstimos e Financiamentos" (dívida financeira) é o mais
+# sujeito a variação entre empresas — bancos/seguradoras em particular usam
+# um plano de contas bem diferente para isso, e mesmo empresas não
+# financeiras às vezes desagregam essa conta de formas diferentes. Rodar
+# `GET /diagnostico/cvm/dfp-arquivo` numa empresa conhecida e conferir EBIT,
+# Caixa e Dívida contra o balanço publicado é ainda mais importante aqui do
+# que foi para o Piotroski antes de confiar na Fórmula Mágica para decisão
+# real — e, para bancos/seguradoras, é bem provável que a dívida financeira
+# simplesmente não seja encontrada por este parser (plano de contas
+# diferente), o que deixa a empresa não elegível em vez de dar um EV errado.
+# ---------------------------------------------------------------------------
+
+CODIGO_CONTA_EBIT = "3.05"
+DESCRICOES_EBIT_ACEITAS = (
+    "resultado antes do resultado financeiro e dos tributos",
+    "resultado antes das receitas e despesas financeiras",
+)
+
+CODIGO_CONTA_CAIXA_EQUIVALENTES = "1.01.01"
+DESCRICOES_CAIXA_EQUIVALENTES_ACEITAS = ("caixa e equivalentes de caixa",)
+
+CODIGO_CONTA_DIVIDA_FINANCEIRA_CIRCULANTE = "2.01.04"
+CODIGO_CONTA_DIVIDA_FINANCEIRA_NAO_CIRCULANTE = "2.02.01"
+DESCRICOES_DIVIDA_FINANCEIRA_ACEITAS = ("empréstimos e financiamentos",)
+
 
 def _eh_linha_de_ativo_total(cd_conta: str, ds_conta: str) -> bool:
     ds_lower = ds_conta.strip().lower()
@@ -530,29 +564,88 @@ def _eh_linha_de_lucro_bruto(cd_conta: str, ds_conta: str) -> bool:
     return any(d in ds_lower for d in DESCRICOES_LUCRO_BRUTO_ACEITAS)
 
 
+def _eh_linha_de_ebit(cd_conta: str, ds_conta: str) -> bool:
+    ds_lower = ds_conta.strip().lower()
+    if cd_conta.strip() == CODIGO_CONTA_EBIT:
+        return True
+    return any(d in ds_lower for d in DESCRICOES_EBIT_ACEITAS)
+
+
+def _eh_linha_de_caixa_equivalentes(cd_conta: str, ds_conta: str) -> bool:
+    ds_lower = ds_conta.strip().lower()
+    if cd_conta.strip() == CODIGO_CONTA_CAIXA_EQUIVALENTES:
+        return True
+    return any(d in ds_lower for d in DESCRICOES_CAIXA_EQUIVALENTES_ACEITAS)
+
+
+def _eh_linha_de_divida_financeira_circulante(cd_conta: str, ds_conta: str) -> bool:
+    ds_lower = ds_conta.strip().lower()
+    if cd_conta.strip() == CODIGO_CONTA_DIVIDA_FINANCEIRA_CIRCULANTE:
+        return True
+    # Fallback por descrição só é seguro aqui olhando também o prefixo do
+    # código (2.01.x) — "empréstimos e financiamentos" sozinho, sem essa
+    # checagem, poderia colidir com uma nota explicativa não circulante
+    # com descrição parecida mas código diferente.
+    return cd_conta.strip().startswith("2.01") and any(
+        d in ds_lower for d in DESCRICOES_DIVIDA_FINANCEIRA_ACEITAS
+    )
+
+
+def _eh_linha_de_divida_financeira_nao_circulante(cd_conta: str, ds_conta: str) -> bool:
+    ds_lower = ds_conta.strip().lower()
+    if cd_conta.strip() == CODIGO_CONTA_DIVIDA_FINANCEIRA_NAO_CIRCULANTE:
+        return True
+    return cd_conta.strip().startswith("2.02") and any(
+        d in ds_lower for d in DESCRICOES_DIVIDA_FINANCEIRA_ACEITAS
+    )
+
+
 def parsear_ativos_por_cnpj(conteudo_csv: str) -> dict[str, dict]:
-    """Faz o parsing de um CSV de BPA e retorna {cnpj: {"ativo_total": ..., "ativo_circulante": ...}}."""
+    """Faz o parsing de um CSV de BPA e retorna
+    {cnpj: {"ativo_total": ..., "ativo_circulante": ..., "caixa_e_equivalentes": ...}}."""
     totais = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_ativo_total)
     circulantes = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_ativo_circulante)
-    cnpjs = set(totais) | set(circulantes)
+    caixas = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_caixa_equivalentes)
+    cnpjs = set(totais) | set(circulantes) | set(caixas)
     return {
-        cnpj: {"ativo_total": totais.get(cnpj), "ativo_circulante": circulantes.get(cnpj)}
+        cnpj: {
+            "ativo_total": totais.get(cnpj),
+            "ativo_circulante": circulantes.get(cnpj),
+            "caixa_e_equivalentes": caixas.get(cnpj),
+        }
         for cnpj in cnpjs
     }
 
 
 def parsear_passivos_por_cnpj(conteudo_csv: str) -> dict[str, dict]:
-    """Faz o parsing de um CSV de BPP e retorna {cnpj: {"passivo_circulante": ..., "passivo_nao_circulante": ...}}."""
+    """Faz o parsing de um CSV de BPP e retorna
+    {cnpj: {"passivo_circulante": ..., "passivo_nao_circulante": ..., "divida_financeira": ...}}.
+    `divida_financeira` é a soma de Empréstimos e Financiamentos circulante
+    + não circulante — None quando NENHUM dos dois foi encontrado (dado
+    ausente, não "dívida zero"); quando só um dos dois é encontrado, o
+    outro conta como zero na soma."""
     circulantes = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_passivo_circulante)
     nao_circulantes = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_passivo_nao_circulante)
+    divida_circulante = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_divida_financeira_circulante)
+    divida_nao_circulante = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_divida_financeira_nao_circulante)
+
     cnpjs = set(circulantes) | set(nao_circulantes)
-    return {
+    cnpjs_com_divida = set(divida_circulante) | set(divida_nao_circulante)
+
+    resultado = {
         cnpj: {
             "passivo_circulante": circulantes.get(cnpj),
             "passivo_nao_circulante": nao_circulantes.get(cnpj),
+            "divida_financeira": None,
         }
         for cnpj in cnpjs
     }
+    for cnpj in cnpjs_com_divida:
+        divida = (divida_circulante.get(cnpj) or 0.0) + (divida_nao_circulante.get(cnpj) or 0.0)
+        resultado.setdefault(cnpj, {"passivo_circulante": None, "passivo_nao_circulante": None})
+        resultado[cnpj]["divida_financeira"] = divida
+
+    return resultado
 
 
 def parsear_caixa_operacional_por_cnpj(conteudo_csv: str) -> dict[str, float]:
@@ -562,25 +655,31 @@ def parsear_caixa_operacional_por_cnpj(conteudo_csv: str) -> dict[str, float]:
 
 
 def parsear_receita_lucro_bruto_por_cnpj(conteudo_csv: str) -> dict[str, dict]:
-    """Faz o parsing de um CSV de DRE e retorna {cnpj: {"receita_liquida": ..., "lucro_bruto": ...}}."""
+    """Faz o parsing de um CSV de DRE e retorna
+    {cnpj: {"receita_liquida": ..., "lucro_bruto": ..., "ebit": ...}}."""
     receitas = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_receita_liquida)
     lucros_brutos = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_lucro_bruto)
-    cnpjs = set(receitas) | set(lucros_brutos)
+    ebits = _parsear_conta_por_cnpj(conteudo_csv, _eh_linha_de_ebit)
+    cnpjs = set(receitas) | set(lucros_brutos) | set(ebits)
     return {
-        cnpj: {"receita_liquida": receitas.get(cnpj), "lucro_bruto": lucros_brutos.get(cnpj)}
+        cnpj: {
+            "receita_liquida": receitas.get(cnpj),
+            "lucro_bruto": lucros_brutos.get(cnpj),
+            "ebit": ebits.get(cnpj),
+        }
         for cnpj in cnpjs
     }
 
 
 async def buscar_ativos_por_ano(ano: int) -> dict[str, dict]:
-    """Retorna {cnpj: {"ativo_total", "ativo_circulante"}} do BPA consolidado do ano."""
+    """Retorna {cnpj: {"ativo_total", "ativo_circulante", "caixa_e_equivalentes"}} do BPA consolidado do ano."""
     caminho_zip = await _baixar_zip_ano(ano)
     csv_bpa = _extrair_csv_do_zip(caminho_zip, ano, "BPA_con")
     return parsear_ativos_por_cnpj(csv_bpa)
 
 
 async def buscar_passivos_por_ano(ano: int) -> dict[str, dict]:
-    """Retorna {cnpj: {"passivo_circulante", "passivo_nao_circulante"}} do BPP consolidado do ano."""
+    """Retorna {cnpj: {"passivo_circulante", "passivo_nao_circulante", "divida_financeira"}} do BPP consolidado do ano."""
     caminho_zip = await _baixar_zip_ano(ano)
     csv_bpp = _extrair_csv_do_zip(caminho_zip, ano, "BPP_con")
     return parsear_passivos_por_cnpj(csv_bpp)
@@ -613,7 +712,7 @@ async def buscar_caixa_operacional_por_ano(ano: int) -> dict[str, float]:
 
 
 async def buscar_receita_lucro_bruto_por_ano(ano: int) -> dict[str, dict]:
-    """Retorna {cnpj: {"receita_liquida", "lucro_bruto"}} da DRE consolidada do ano."""
+    """Retorna {cnpj: {"receita_liquida", "lucro_bruto", "ebit"}} da DRE consolidada do ano."""
     caminho_zip = await _baixar_zip_ano(ano)
     csv_dre = _extrair_csv_do_zip(caminho_zip, ano, "DRE_con")
     return parsear_receita_lucro_bruto_por_cnpj(csv_dre)
