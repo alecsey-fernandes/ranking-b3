@@ -26,11 +26,19 @@ from app.strategies.bazin import BazinStrategy
 from app.strategies.buffett_like import BuffettLikeStrategy
 from app.strategies.graham import GrahamStrategy
 from app.strategies.magic_formula import MagicFormulaStrategy
+from app.strategies.peg_lynch import PegLynchStrategy
 from app.strategies.piotroski import PiotroskiStrategy
 
 logger = logging.getLogger(__name__)
 
-ESTRATEGIAS_ATIVAS = [GrahamStrategy(), MagicFormulaStrategy(), BazinStrategy(), PiotroskiStrategy(), BuffettLikeStrategy()]
+ESTRATEGIAS_ATIVAS = [
+    GrahamStrategy(),
+    MagicFormulaStrategy(),
+    BazinStrategy(),
+    PiotroskiStrategy(),
+    BuffettLikeStrategy(),
+    PegLynchStrategy(),
+]
 INTERVALO_COLETA_HORAS = 24
 
 

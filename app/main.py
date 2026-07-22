@@ -22,6 +22,7 @@ from app.strategies.bazin import BazinStrategy
 from app.strategies.buffett_like import BuffettLikeStrategy
 from app.strategies.graham import GrahamStrategy
 from app.strategies.magic_formula import MagicFormulaStrategy
+from app.strategies.peg_lynch import PegLynchStrategy
 from app.strategies.piotroski import PiotroskiStrategy
 
 logging.basicConfig(level=logging.INFO)
@@ -40,7 +41,14 @@ UNIVERSO_MVP = [
     "WEGE3", "BBAS3", "B3SA3", "RENT3", "EGIE3",
 ]
 
-ESTRATEGIAS_MVP = [GrahamStrategy(), MagicFormulaStrategy(), BazinStrategy(), PiotroskiStrategy(), BuffettLikeStrategy()]
+ESTRATEGIAS_MVP = [
+    GrahamStrategy(),
+    MagicFormulaStrategy(),
+    BazinStrategy(),
+    PiotroskiStrategy(),
+    BuffettLikeStrategy(),
+    PegLynchStrategy(),
+]
 
 
 @app.on_event("startup")

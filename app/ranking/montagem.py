@@ -161,6 +161,44 @@ def _calcular_flags_buffett(
     return roe_consistente, margem_estavel, (roes or None)
 
 
+def _calcular_crescimento_lucro_pct(historico_fundamentos: list[dict]) -> Optional[float]:
+    """
+    CAGR (taxa de crescimento anual composta) do lucro líquido, em
+    percentual (ex: 12.5 significa 12,5% ao ano), usado pelo PEG/Lynch
+    (app/strategies/peg_lynch.py). Compara o ano mais recente disponível
+    com o mais antigo dentro do histórico de até 5 anos.
+
+    Retorna None quando não há pelo menos 2 anos de lucro líquido
+    positivo no histórico — CAGR não é definido (nem economicamente
+    interpretável) partindo de lucro zero ou negativo, e uma empresa que
+    já teve prejuízo em algum ano recente não é o perfil que o PEG de
+    Lynch pretende capturar (crescimento consistente).
+    """
+    pontos = [
+        (snapshot["data_referencia"], snapshot.get("lucro_liquido"))
+        for snapshot in historico_fundamentos
+        if snapshot.get("lucro_liquido") is not None
+    ]
+    if len(pontos) < 2:
+        return None
+
+    # historico_fundamentos vem mais recente primeiro; pega o mais
+    # recente e o mais antigo dentro da janela disponível.
+    pontos.sort(key=lambda p: p[0])
+    data_antiga, lucro_antigo = pontos[0]
+    data_recente, lucro_recente = pontos[-1]
+
+    if lucro_antigo is None or lucro_recente is None or lucro_antigo <= 0 or lucro_recente <= 0:
+        return None
+
+    anos = date.fromisoformat(data_recente).year - date.fromisoformat(data_antiga).year
+    if anos <= 0:
+        return None
+
+    cagr = (lucro_recente / lucro_antigo) ** (1 / anos) - 1
+    return cagr * 100
+
+
 def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]) -> list[Indicadores]:
     """
     Para cada ticker, busca o snapshot de preço mais recente (B3) e o
@@ -198,6 +236,7 @@ def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]
 
         historico_fundamentos = buscar_historico_fundamentos_cvm(conn, ticker, anos=5)
         roe_consistente, margem_estavel, roe_historico = _calcular_flags_buffett(historico_fundamentos)
+        crescimento_lucro_pct_5a = _calcular_crescimento_lucro_pct(historico_fundamentos)
         roe_atual = _razao(fundamentos_row.get("lucro_liquido"), fundamentos_row.get("patrimonio_liquido"))
         margem_liquida_atual = _razao(fundamentos_row.get("lucro_liquido"), fundamentos_row.get("receita_liquida"))
 
@@ -248,6 +287,13 @@ def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]
                 roe_historico_5a=roe_historico,
                 buffett_roe_consistente=roe_consistente,
                 buffett_margem_estavel=margem_estavel,
+                # Crescimento de lucro (CAGR, até 5 anos) e lucro do ano
+                # anterior — usados pelo PEG/Lynch (ver
+                # app/strategies/peg_lynch.py).
+                crescimento_lucro_pct_5a=crescimento_lucro_pct_5a,
+                lucro_liquido_ano_anterior=(
+                    fundamentos_anterior_row.get("lucro_liquido") if fundamentos_anterior_row else None
+                ),
             )
         )
 
