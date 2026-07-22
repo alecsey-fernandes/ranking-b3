@@ -31,6 +31,10 @@ async def atualizar_precos_b3(tickers: list[str], ano: int | None = None) -> dic
     inicializar_schema()
     ano_alvo = ano or date.today().year
 
+    # Deduplica preservando a ordem — evita repetir o mesmo ticker no
+    # resumo retornado quando a lista pedida tem repetições.
+    tickers = list(dict.fromkeys(tickers))
+
     try:
         cotacoes = await buscar_cotacoes_ano(ano_alvo, tickers)
     except B3ClientError as exc:

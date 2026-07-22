@@ -254,7 +254,12 @@ def montar_indicadores_para_ranking(conn: sqlite3.Connection, tickers: list[str]
     """
     resultado: list[Indicadores] = []
 
-    for ticker in tickers:
+    # Deduplica preservando a ordem — pedir o mesmo ticker duas vezes (fácil
+    # de acontecer numa lista longa colada à mão) não deve gerar duas linhas
+    # idênticas no ranking.
+    tickers_unicos = list(dict.fromkeys(tickers))
+
+    for ticker in tickers_unicos:
         preco_row = buscar_ultimo_preco_valido(conn, ticker)
         fundamentos_row = buscar_ultimos_fundamentos_cvm(conn, ticker)
 

@@ -30,6 +30,7 @@ from app.data_sources.cvm_client import (
     buscar_proventos_por_ano,
     buscar_receita_lucro_bruto_por_ano,
 )
+from app.data_sources.cvm_fca_client import CvmFcaClientError, resolver_cnpjs_ausentes
 from app.data_sources.ticker_mapping import TICKER_PARA_CNPJ
 from app.db.connection import get_connection, inicializar_schema
 from app.db.repository import salvar_snapshot_indicadores
@@ -46,16 +47,51 @@ async def importar_lucro_historico_cvm(
     única vez (todas as empresas de uma vez) e persiste o lucro líquido
     dos tickers do nosso universo que tiverem CNPJ mapeado.
 
+    O CNPJ de cada ticker vem primeiro do dicionário fixo já confirmado
+    manualmente (`TICKER_PARA_CNPJ`, app/data_sources/ticker_mapping.py);
+    para qualquer ticker que não estiver lá, tenta resolver
+    automaticamente via FCA da CVM (`resolver_cnpjs_ausentes`) antes de
+    desistir dele — isso evita ter que adicionar cada ticker novo manualmente
+    ao dicionário fixo só para rodar a importação.
+
     Retorna um resumo por ano: quantos tickers foram encontrados vs.
-    quantos ficaram de fora (sem CNPJ mapeado ou sem dado publicado
-    naquele ano — ex: empresa criada/listada depois).
+    quantos ficaram de fora (sem CNPJ mapeado, mesmo após tentar resolver
+    via FCA, ou sem dado publicado naquele ano — ex: empresa criada/listada
+    depois).
     """
     inicializar_schema()
 
-    tickers_sem_cnpj = [t for t in tickers if t not in TICKER_PARA_CNPJ]
+    # Deduplica preservando a ordem — evita baixar/persistir o mesmo
+    # ticker mais de uma vez quando a lista pedida tem repetições.
+    tickers = list(dict.fromkeys(tickers))
+
+    cnpj_por_ticker = {t: TICKER_PARA_CNPJ[t] for t in tickers if t in TICKER_PARA_CNPJ}
+    tickers_sem_cnpj_fixo = [t for t in tickers if t not in cnpj_por_ticker]
+
+    tickers_resolvidos_via_fca: list[str] = []
+    tickers_sem_cnpj: list[str] = tickers_sem_cnpj_fixo
+    if tickers_sem_cnpj_fixo:
+        try:
+            # Tenta resolver usando os próprios anos pedidos como candidatos
+            # (o cadastro FCA de um ano reflete os tickers vigentes naquele
+            # ano) — sem precisar baixar um ano extra além dos já pedidos.
+            resolvidos, tickers_sem_cnpj = await resolver_cnpjs_ausentes(tickers_sem_cnpj_fixo, anos)
+            cnpj_por_ticker.update(resolvidos)
+            tickers_resolvidos_via_fca = sorted(resolvidos)
+            if tickers_resolvidos_via_fca:
+                logger.info(
+                    "CNPJ resolvido via FCA para %d ticker(s) sem entrada em ticker_mapping.py: %s",
+                    len(tickers_resolvidos_via_fca), tickers_resolvidos_via_fca,
+                )
+        except CvmFcaClientError as exc:
+            logger.error("Falha ao tentar resolver CNPJs via FCA: %s", exc)
+            # Não aborta a importação inteira por isso — os tickers com
+            # CNPJ já conhecido (fixo) continuam sendo importados normalmente.
+
     if tickers_sem_cnpj:
         logger.warning(
-            "Tickers sem CNPJ mapeado em ticker_mapping.py (ignorados): %s", tickers_sem_cnpj
+            "Tickers sem CNPJ mapeado, mesmo após tentar resolver via FCA (ignorados): %s",
+            tickers_sem_cnpj,
         )
 
     resumo_por_ano: dict[int, dict] = {}
@@ -118,7 +154,7 @@ async def importar_lucro_historico_cvm(
 
         with get_connection() as conn:
             for ticker in tickers:
-                cnpj = TICKER_PARA_CNPJ.get(ticker)
+                cnpj = cnpj_por_ticker.get(ticker)
                 if not cnpj:
                     continue
 
@@ -200,4 +236,8 @@ async def importar_lucro_historico_cvm(
             ano, len(encontrados), len(nao_encontrados), len(suspeitos),
         )
 
-    return {"tickers_sem_cnpj_mapeado": tickers_sem_cnpj, "por_ano": resumo_por_ano}
+    return {
+        "tickers_sem_cnpj_mapeado": tickers_sem_cnpj,
+        "tickers_cnpj_resolvido_via_fca": tickers_resolvidos_via_fca,
+        "por_ano": resumo_por_ano,
+    }

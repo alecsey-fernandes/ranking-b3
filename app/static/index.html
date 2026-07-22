@@ -542,8 +542,11 @@ async function rodarColeta({ precos, fundamentos }) {
       const data = await r.json();
       if (!r.ok) throw new Error(data.detail || "falha ao importar fundamentos");
       mensagens.push(`Fundamentos: importação da CVM concluída para ${anos.length} ano(s).`);
+      if (data.tickers_cnpj_resolvido_via_fca && data.tickers_cnpj_resolvido_via_fca.length > 0) {
+        mensagens.push(`✓ CNPJ resolvido automaticamente via CVM/FCA: ${data.tickers_cnpj_resolvido_via_fca.join(", ")}`);
+      }
       if (data.tickers_sem_cnpj_mapeado && data.tickers_sem_cnpj_mapeado.length > 0) {
-        mensagens.push(`⚠ Sem CNPJ mapeado (ignorados): ${data.tickers_sem_cnpj_mapeado.join(", ")}`);
+        mensagens.push(`⚠ Sem CNPJ mapeado, mesmo após tentar resolver via FCA (ignorados): ${data.tickers_sem_cnpj_mapeado.join(", ")}`);
       }
     }
 
