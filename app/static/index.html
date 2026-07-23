@@ -247,22 +247,49 @@
     margin-top: 30px;
   }
 
-  details.pesos summary {
-    cursor: pointer; color: var(--text-dim); font-size: 0.78rem; margin-bottom: 10px;
+  .pesos-panel {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .pesos-panel h3 {
+    margin: 0 0 4px 0;
+    font-size: 0.9rem;
   }
   .pesos-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-    gap: 8px;
-    margin-top: 8px;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+    margin-top: 10px;
   }
   .peso-item {
-    font-size: 0.78rem; color: var(--text-dim);
-    display: flex; justify-content: space-between;
-    background: #0d1512; border: 1px solid var(--border); border-radius: 6px;
-    padding: 6px 9px;
+    background: #0d1512;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
   }
-  .peso-item b { color: var(--text); }
+  .peso-item label {
+    font-size: 0.72rem;
+    margin-bottom: 5px;
+  }
+  .peso-item .peso-input-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .peso-item input[type="number"] {
+    padding: 6px 8px;
+    text-align: right;
+  }
+  .peso-item .pct-sign { color: var(--text-dim); font-size: 0.85rem; }
+  .pesos-soma {
+    margin-top: 12px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-dim);
+  }
+  .pesos-soma.ok { color: var(--accent); }
+  .pesos-soma.bad { color: var(--danger); }
 </style>
 </head>
 <body>
@@ -289,12 +316,14 @@
       </div>
     </div>
 
-    <div id="feedback"></div>
-
-    <details class="pesos" id="pesosBox" style="margin-top:14px; display:none;">
-      <summary>Pesos usados neste ranking</summary>
+    <div class="pesos-panel" id="pesosCard">
+      <h3>Pesos das estratégias</h3>
+      <p class="hint">Ajuste o peso de cada estratégia no ranking final. A soma precisa dar exatamente 100.</p>
       <div class="pesos-grid" id="pesosGrid"></div>
-    </details>
+      <div id="pesosSoma" class="pesos-soma"></div>
+    </div>
+
+    <div id="feedback"></div>
   </div>
 
   <div class="card" id="resultCard" style="display:none;">
@@ -402,16 +431,64 @@ async function checarSaude() {
   }
 }
 
-function renderPesos(pesos) {
+function renderPesosInputs(pesos) {
   const grid = $("pesosGrid");
   grid.innerHTML = "";
   Object.entries(pesos).forEach(([nome, valor]) => {
     const div = document.createElement("div");
     div.className = "peso-item";
-    div.innerHTML = `<span>${NOMES_ESTRATEGIA[nome] || nome}</span><b>${valor}%</b>`;
+    div.innerHTML = `
+      <label for="peso_${nome}">${NOMES_ESTRATEGIA[nome] || nome}</label>
+      <div class="peso-input-row">
+        <input type="number" id="peso_${nome}" data-peso="${nome}" min="0" max="100" step="0.5" value="${valor}">
+        <span class="pct-sign">%</span>
+      </div>
+    `;
     grid.appendChild(div);
   });
-  $("pesosBox").style.display = "block";
+  grid.querySelectorAll("input[data-peso]").forEach(input => {
+    input.addEventListener("input", atualizarSomaPesos);
+  });
+  atualizarSomaPesos();
+}
+
+function lerPesosAtuais() {
+  const pesos = {};
+  document.querySelectorAll("#pesosGrid input[data-peso]").forEach(input => {
+    pesos[input.dataset.peso] = parseFloat(input.value) || 0;
+  });
+  return pesos;
+}
+
+function somaPesos(pesos) {
+  return Object.values(pesos).reduce((acc, v) => acc + v, 0);
+}
+
+// Devolve true/false e já atualiza o indicador visual de soma — chamada
+// tanto a cada tecla digitada quanto antes de gerar o ranking.
+function atualizarSomaPesos() {
+  const soma = somaPesos(lerPesosAtuais());
+  const somaArredondada = Math.round(soma * 100) / 100;
+  const el = $("pesosSoma");
+  const ok = Math.abs(soma - 100) < 0.01;
+  el.className = "pesos-soma " + (ok ? "ok" : "bad");
+  el.textContent = ok ? `Soma: ${somaArredondada}/100 ✓` : `Soma: ${somaArredondada}/100 — precisa somar exatamente 100`;
+  return ok;
+}
+
+function pesosQs(pesos) {
+  return Object.entries(pesos).map(([nome, valor]) => `peso_${nome}=${encodeURIComponent(valor)}`).join("&");
+}
+
+async function carregarPesosPadrao() {
+  try {
+    const r = await fetch("/pesos/padrao");
+    if (!r.ok) throw new Error();
+    renderPesosInputs(await r.json());
+  } catch {
+    // fallback se a API estiver fora do ar no carregamento inicial da página
+    renderPesosInputs({ graham: 20, bazin: 15, piotroski: 20, buffett_like: 15, peg_lynch: 5, magic_formula: 25 });
+  }
 }
 
 function renderRanking(ranking) {
@@ -469,13 +546,19 @@ async function gerarRanking() {
     return;
   }
 
+  const pesos = lerPesosAtuais();
+  if (!atualizarSomaPesos()) {
+    showFeedback(fb, "error", "A soma dos pesos das estratégias precisa dar exatamente 100 antes de gerar o ranking.");
+    return;
+  }
+
   hideFeedback(fb);
   setBusy(btn, true, "gerando...");
   $("resultCard").style.display = "none";
   $("emptyCard").style.display = "none";
 
   try {
-    const r = await fetch(`/ranking/dados-gratuitos?${qs(tickers)}`);
+    const r = await fetch(`/ranking/dados-gratuitos?${qs(tickers)}&${pesosQs(pesos)}`);
     const data = await r.json();
 
     if (!r.ok) {
@@ -493,7 +576,6 @@ async function gerarRanking() {
       return;
     }
 
-    renderPesos(data.pesos_aplicados);
     $("resultHint").textContent =
       `${data.total_no_ranking} de ${data.total_empresas_com_dados_completos} empresa(s) com dados completos entraram no ranking. Clique numa linha para ver o detalhe por estratégia.`;
     renderRanking(data.ranking);
@@ -566,6 +648,7 @@ $("btnFundamentos").addEventListener("click", () => rodarColeta({ precos: false,
 $("btnCompleto").addEventListener("click", () => rodarColeta({ precos: true, fundamentos: true }));
 
 checarSaude();
+carregarPesosPadrao();
 </script>
 </body>
 </html>

@@ -53,6 +53,48 @@ app = FastAPI(
     version="0.2.0",
 )
 
+
+def _resolver_pesos(
+    peso_graham: float | None,
+    peso_bazin: float | None,
+    peso_piotroski: float | None,
+    peso_buffett_like: float | None,
+    peso_peg_lynch: float | None,
+    peso_magic_formula: float | None,
+) -> PesosEstrategias:
+    """
+    Resolve os pesos a usar no ranking: se NENHUM peso customizado foi
+    informado, usa `pesos_padrao`. Se algum foi informado, exige TODOS
+    os 6 (evita ambiguidade de "o que fazer com os que faltaram") e
+    valida que a soma dá 100 — devolve 422 com mensagem clara se não der.
+    """
+    pesos_informados = [peso_graham, peso_bazin, peso_piotroski, peso_buffett_like, peso_peg_lynch, peso_magic_formula]
+    if all(p is None for p in pesos_informados):
+        return pesos_padrao
+
+    if any(p is None for p in pesos_informados):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Para customizar os pesos, informe os 6 (peso_graham, peso_bazin, peso_piotroski, "
+                "peso_buffett_like, peso_peg_lynch, peso_magic_formula). Se quiser usar o padrão, não informe nenhum."
+            ),
+        )
+
+    pesos = PesosEstrategias(
+        graham=peso_graham,
+        bazin=peso_bazin,
+        piotroski=peso_piotroski,
+        buffett_like=peso_buffett_like,
+        peg_lynch=peso_peg_lynch,
+        magic_formula=peso_magic_formula,
+    )
+    try:
+        pesos.validar_soma()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return pesos
+
 # Dashboard web (app/static/index.html) — HTML/CSS/JS puro, autocontido
 # num único arquivo (sem CSS/JS separados, sem build step), consumindo os
 # mesmos endpoints da API na mesma origem (sem precisar de CORS). Serve na
@@ -196,10 +238,29 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/pesos/padrao")
+async def obter_pesos_padrao():
+    """Pesos padrão de cada estratégia no ranking ponderado (somam 100).
+    Usado pelo dashboard para preencher os campos de peso na primeira
+    carga — para customizar, veja os parâmetros `peso_*` de /ranking e
+    /ranking/dados-gratuitos."""
+    return pesos_padrao.model_dump()
+
+
 @app.get("/ranking")
 async def obter_ranking(
     tickers: list[str] = Query(default=UNIVERSO_MVP, description="Lista de tickers a incluir no ranking"),
+    peso_graham: float | None = Query(default=None, description="Peso da estratégia Graham (0-100). Informe os 6 pesos juntos, ou nenhum para usar o padrão."),
+    peso_bazin: float | None = Query(default=None, description="Peso da estratégia Bazin (0-100)"),
+    peso_piotroski: float | None = Query(default=None, description="Peso da estratégia Piotroski F-Score (0-100)"),
+    peso_buffett_like: float | None = Query(default=None, description="Peso da estratégia Buffett-like (0-100)"),
+    peso_peg_lynch: float | None = Query(default=None, description="Peso da estratégia PEG/Lynch (0-100)"),
+    peso_magic_formula: float | None = Query(default=None, description="Peso da estratégia Fórmula Mágica (0-100)"),
 ):
+    pesos = _resolver_pesos(
+        peso_graham, peso_bazin, peso_piotroski, peso_buffett_like, peso_peg_lynch, peso_magic_formula
+    )
+
     client = BrapiClient()
     try:
         empresas = await client.buscar_lote(tickers)
@@ -209,13 +270,19 @@ async def obter_ranking(
     if not empresas:
         raise HTTPException(status_code=404, detail="Nenhuma empresa encontrada para os tickers informados")
 
-    ranking = gerar_ranking(empresas, ESTRATEGIAS_MVP, pesos_padrao)
-    return {"total_empresas": len(ranking), "pesos_aplicados": pesos_padrao.model_dump(), "ranking": ranking}
+    ranking = gerar_ranking(empresas, ESTRATEGIAS_MVP, pesos)
+    return {"total_empresas": len(ranking), "pesos_aplicados": pesos.model_dump(), "ranking": ranking}
 
 
 @app.get("/ranking/dados-gratuitos")
 async def obter_ranking_dados_gratuitos(
     tickers: list[str] = Query(default=UNIVERSO_MVP, description="Lista de tickers a incluir no ranking"),
+    peso_graham: float | None = Query(default=None, description="Peso da estratégia Graham (0-100). Informe os 6 pesos juntos, ou nenhum para usar o padrão."),
+    peso_bazin: float | None = Query(default=None, description="Peso da estratégia Bazin (0-100)"),
+    peso_piotroski: float | None = Query(default=None, description="Peso da estratégia Piotroski F-Score (0-100)"),
+    peso_buffett_like: float | None = Query(default=None, description="Peso da estratégia Buffett-like (0-100)"),
+    peso_peg_lynch: float | None = Query(default=None, description="Peso da estratégia PEG/Lynch (0-100)"),
+    peso_magic_formula: float | None = Query(default=None, description="Peso da estratégia Fórmula Mágica (0-100)"),
 ):
     """
     Ranking calculado inteiramente a partir de fontes gratuitas já
@@ -228,6 +295,10 @@ async def obter_ranking_dados_gratuitos(
     empresas — EV/EBIT e ROIC ainda não têm fonte gratuita integrada
     (ver README).
     """
+    pesos = _resolver_pesos(
+        peso_graham, peso_bazin, peso_piotroski, peso_buffett_like, peso_peg_lynch, peso_magic_formula
+    )
+
     with get_connection() as conn:
         empresas = montar_indicadores_para_ranking(conn, tickers)
 
@@ -237,11 +308,11 @@ async def obter_ranking_dados_gratuitos(
             detail="Nenhum ticker com preço E fundamentos já coletados. Rode /coleta/b3/precos e /coleta/cvm/lucro-historico primeiro.",
         )
 
-    ranking = gerar_ranking(empresas, ESTRATEGIAS_MVP, pesos_padrao)
+    ranking = gerar_ranking(empresas, ESTRATEGIAS_MVP, pesos)
     return {
         "total_empresas_com_dados_completos": len(empresas),
         "total_no_ranking": len(ranking),
-        "pesos_aplicados": pesos_padrao.model_dump(),
+        "pesos_aplicados": pesos.model_dump(),
         "ranking": ranking,
     }
 
