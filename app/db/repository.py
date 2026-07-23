@@ -263,3 +263,30 @@ def buscar_historico_fundamentos_cvm(conn: sqlite3.Connection, ticker: str, anos
 def listar_tickers_com_historico(conn: sqlite3.Connection) -> list[str]:
     cursor = conn.execute("SELECT DISTINCT ticker FROM indicador_snapshot ORDER BY ticker")
     return [row["ticker"] for row in cursor.fetchall()]
+
+
+def buscar_dividendos_por_ano(
+    conn: sqlite3.Connection, ticker: str, ano_minimo: int, ano_maximo: int
+) -> dict[int, float]:
+    """
+    Devolve {ano: dividendo_por_acao} persistidos para o ticker entre
+    `ano_minimo` e `ano_maximo` (inclusive), a partir dos snapshots
+    anuais importados da CVM (`data_referencia` = 31/dez do ano — ver
+    app/jobs/importar_cvm.py). Usado pelo backtest de carteira
+    (app/backtest/calculo.py) para simular o retorno com dividendos.
+
+    Retorna dict vazio se não houver nenhum ano importado no intervalo —
+    isso NÃO significa necessariamente que a empresa não pagou
+    dividendos naquele período, só que a importação CVM ainda não foi
+    rodada para esses anos/ticker (ver /coleta/cvm/lucro-historico).
+    """
+    cursor = conn.execute(
+        """
+        SELECT data_referencia, dividendo_por_acao FROM indicador_snapshot
+        WHERE ticker = ? AND dividendo_por_acao IS NOT NULL
+          AND data_referencia >= ? AND data_referencia <= ?
+        ORDER BY data_referencia ASC
+        """,
+        (ticker, date(ano_minimo, 1, 1).isoformat(), date(ano_maximo, 12, 31).isoformat()),
+    )
+    return {int(row["data_referencia"][:4]): row["dividendo_por_acao"] for row in cursor.fetchall()}

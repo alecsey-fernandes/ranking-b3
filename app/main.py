@@ -7,7 +7,13 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.analysis.consistencia import calcular_consistencia_lucro
-from app.backtest.calculo import BacktestError, ItemCarteira, calcular_backtest_carteira, resultado_para_dict
+from app.backtest.calculo import (
+    BacktestError,
+    EventoSocietario,
+    ItemCarteira,
+    calcular_backtest_carteira,
+    resultado_para_dict,
+)
 from app.backtest.schemas import CarteiraBacktestRequest
 from app.config import PesosEstrategias, pesos_padrao
 from app.data_sources.brapi_client import BrapiClient, BrapiClientError
@@ -328,20 +334,36 @@ async def backtest_carteira(payload: CarteiraBacktestRequest):
     logo depois, se cair em fim de semana/feriado) e o preço mais
     recente disponível, e calcula quanto o valor investido teria virado.
 
-    Não depende de nenhuma coleta prévia — busca as cotações direto na
-    B3 a cada chamada (com cache local em disco por ano, ver
-    `app/data_sources/b3_cotahist_client.py`).
+    Não depende de nenhuma coleta prévia de preço — busca as cotações
+    direto na B3 a cada chamada (com cache local em disco por ano). Já
+    os dividendos por ação usam o que já estiver persistido via
+    `/coleta/cvm/lucro-historico` (rode antes para os tickers/anos do
+    período, senão os dividendos desses anos ficam de fora do cálculo).
 
-    ⚠️ Etapa 1 desta funcionalidade: mede só a variação do preço da
-    ação, sem considerar proventos (dividendos/JCP) recebidos no
-    período nem ajustar desdobramentos/grupamentos. A carteira também
-    não é salva — cada chamada recalcula do zero. Ver
-    `app/backtest/calculo.py` para o detalhe das limitações e os
-    próximos passos planejados.
+    Etapa 2: dividendos/JCP agora sempre entram no cálculo —
+    `reinvestir_dividendos` escolhe se viram caixa acumulado (padrão)
+    ou são reinvestidos em novas ações. Desdobramentos/grupamentos no
+    período podem ser informados por ticker em `eventos_societarios`
+    (sem isso, o resultado fica distorcido para quem passou por um
+    evento desses). A resposta traz tanto a rentabilidade total (com
+    dividendos) quanto a rentabilidade só de preço, lado a lado, para
+    comparação. Ver `app/backtest/calculo.py` para o detalhe das
+    limitações e os próximos passos planejados.
     """
-    itens = [ItemCarteira(ticker=item.ticker, quantidade=item.quantidade) for item in payload.itens]
+    itens = [
+        ItemCarteira(
+            ticker=item.ticker,
+            quantidade=item.quantidade,
+            eventos_societarios=[
+                EventoSocietario(data=evento.data, fator=evento.fator) for evento in (item.eventos_societarios or [])
+            ],
+        )
+        for item in payload.itens
+    ]
     try:
-        resultado = await calcular_backtest_carteira(itens, payload.data_inicio)
+        resultado = await calcular_backtest_carteira(
+            itens, payload.data_inicio, reinvestir_dividendos=payload.reinvestir_dividendos
+        )
     except BacktestError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
