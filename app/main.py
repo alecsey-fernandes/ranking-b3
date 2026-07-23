@@ -7,6 +7,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.analysis.consistencia import calcular_consistencia_lucro
+from app.backtest.calculo import BacktestError, ItemCarteira, calcular_backtest_carteira, resultado_para_dict
+from app.backtest.schemas import CarteiraBacktestRequest
 from app.config import PesosEstrategias, pesos_padrao
 from app.data_sources.brapi_client import BrapiClient, BrapiClientError
 from app.data_sources.cvm_client import CvmClientError, inspecionar_arquivo_dfp, listar_arquivos_dfp
@@ -315,3 +317,34 @@ async def evolucao_ranking_empresa(ticker: str, limite: int = 40):
     if not evolucao:
         raise HTTPException(status_code=404, detail=f"Sem histórico de ranking para {ticker}. Rode /coleta/executar primeiro.")
     return {"ticker": ticker.upper(), "total_snapshots": len(evolucao), "evolucao": evolucao}
+
+
+@app.post("/backtest/carteira")
+async def backtest_carteira(payload: CarteiraBacktestRequest):
+    """
+    Simula o retorno de uma carteira desde uma data de início escolhida
+    até hoje: para cada ticker, busca o preço de fechamento oficial da
+    B3 (COTAHIST) na data de início (ou no primeiro pregão disponível
+    logo depois, se cair em fim de semana/feriado) e o preço mais
+    recente disponível, e calcula quanto o valor investido teria virado.
+
+    Não depende de nenhuma coleta prévia — busca as cotações direto na
+    B3 a cada chamada (com cache local em disco por ano, ver
+    `app/data_sources/b3_cotahist_client.py`).
+
+    ⚠️ Etapa 1 desta funcionalidade: mede só a variação do preço da
+    ação, sem considerar proventos (dividendos/JCP) recebidos no
+    período nem ajustar desdobramentos/grupamentos. A carteira também
+    não é salva — cada chamada recalcula do zero. Ver
+    `app/backtest/calculo.py` para o detalhe das limitações e os
+    próximos passos planejados.
+    """
+    itens = [ItemCarteira(ticker=item.ticker, quantidade=item.quantidade) for item in payload.itens]
+    try:
+        resultado = await calcular_backtest_carteira(itens, payload.data_inicio)
+    except BacktestError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    resposta = resultado_para_dict(resultado)
+    resposta["nome_carteira"] = payload.nome_carteira
+    return resposta
