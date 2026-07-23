@@ -52,6 +52,7 @@ Etapa 2 (esta versão) — o que mudou desde a etapa 1:
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -154,9 +155,16 @@ def _simular_posicao(
 
     for ano, valor_por_acao in dividendos_por_ano.items():
         preco_do_ano = precos_fim_de_ano.get(ano)
-        if preco_do_ano is None:
-            continue
-        data_evento, preco_evento = preco_do_ano
+        if preco_do_ano is not None:
+            data_evento, preco_evento = preco_do_ano
+        else:
+            # Sem preço real do fim do ano disponível: usa 31/dez como
+            # aproximação só para ORDENAR o evento na linha do tempo. Sem
+            # reinvestimento o preço nem é usado (vira caixa), então esse
+            # caso é o normal quando reinvestir_dividendos=False (ver
+            # `calcular_backtest_carteira`, que só busca preço de fim de
+            # ano quando reinvestir_dividendos=True).
+            data_evento, preco_evento = date(ano, 12, 31), None
         if data_pregao_inicio < data_evento <= data_pregao_atual:
             linha_do_tempo.append((data_evento, "dividendo", (valor_por_acao, preco_evento)))
 
@@ -376,23 +384,34 @@ async def calcular_backtest_carteira(
 
     tickers = list(dict.fromkeys(item.ticker.upper() for item in itens))
 
+    inicio_cronometro = time.monotonic()
     try:
         cotacoes_ano_inicio = await buscar_cotacoes_ano(data_inicio.year, tickers)
     except B3ClientError as exc:
         raise BacktestError(
             f"Falha ao buscar cotações da B3 para o ano de início ({data_inicio.year}): {exc}"
         ) from exc
+    logger.info("Backtest: cotações do ano de início (%d) prontas em %.1fs", data_inicio.year, time.monotonic() - inicio_cronometro)
 
+    inicio_cronometro = time.monotonic()
     precos_atuais = await _buscar_preco_atual_com_fallback(tickers, hoje.year)
+    logger.info("Backtest: preço atual pronto em %.1fs", time.monotonic() - inicio_cronometro)
 
     with get_connection() as conn:
         dividendos_por_ticker = {
             ticker: buscar_dividendos_por_ano(conn, ticker, data_inicio.year, hoje.year) for ticker in tickers
         }
 
-    precos_fim_de_ano = await _buscar_precos_fim_de_ano(
-        tickers, dividendos_por_ticker, cotacoes_ano_inicio, precos_atuais, data_inicio.year, hoje.year
-    )
+    # Preço de fim de ano só é necessário para VALORIZAR o reinvestimento
+    # (comprar ações com o dividendo). Sem reinvestimento, o dividendo vira
+    # caixa e o preço nem é usado — pular essa busca evita baixar/processar
+    # anos extras de COTAHIST à toa no caso mais comum (padrão é não
+    # reinvestir), que era uma causa real de requisições lentas.
+    precos_fim_de_ano: dict[str, dict[int, tuple[date, float]]] = {}
+    if reinvestir_dividendos:
+        precos_fim_de_ano = await _buscar_precos_fim_de_ano(
+            tickers, dividendos_por_ticker, cotacoes_ano_inicio, precos_atuais, data_inicio.year, hoje.year
+        )
 
     return montar_resultado_backtest(
         itens,

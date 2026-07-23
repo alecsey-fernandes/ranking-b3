@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from app.models import Indicadores, RankingFinal
@@ -290,3 +290,52 @@ def buscar_dividendos_por_ano(
         (ticker, date(ano_minimo, 1, 1).isoformat(), date(ano_maximo, 12, 31).isoformat()),
     )
     return {int(row["data_referencia"][:4]): row["dividendo_por_acao"] for row in cursor.fetchall()}
+
+
+def criar_backtest_job(conn: sqlite3.Connection, job_id: str, parametros_json: str) -> None:
+    """Registra um job de backtest recém-criado com status 'processando'.
+    Chamado no handler do POST /backtest/carteira, antes de agendar o
+    cálculo em segundo plano (ver app/backtest/calculo.py)."""
+    conn.execute(
+        """
+        INSERT INTO backtest_job (id, status, criado_em, parametros_json)
+        VALUES (?, 'processando', ?, ?)
+        """,
+        (job_id, datetime.utcnow().isoformat(), parametros_json),
+    )
+
+
+def concluir_backtest_job(conn: sqlite3.Connection, job_id: str, resultado_json: str) -> None:
+    conn.execute(
+        """
+        UPDATE backtest_job SET status = 'concluido', concluido_em = ?, resultado_json = ?
+        WHERE id = ?
+        """,
+        (datetime.utcnow().isoformat(), resultado_json, job_id),
+    )
+
+
+def falhar_backtest_job(conn: sqlite3.Connection, job_id: str, erro: str) -> None:
+    conn.execute(
+        """
+        UPDATE backtest_job SET status = 'erro', concluido_em = ?, erro = ?
+        WHERE id = ?
+        """,
+        (datetime.utcnow().isoformat(), erro, job_id),
+    )
+
+
+def buscar_backtest_job(conn: sqlite3.Connection, job_id: str) -> Optional[dict]:
+    cursor = conn.execute(
+        "SELECT id, status, criado_em, concluido_em, resultado_json, erro FROM backtest_job WHERE id = ?",
+        (job_id,),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    resultado = dict(row)
+    if resultado["resultado_json"]:
+        resultado["resultado"] = json.loads(resultado.pop("resultado_json"))
+    else:
+        resultado.pop("resultado_json")
+    return resultado

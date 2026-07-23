@@ -85,6 +85,23 @@ CREATE TABLE IF NOT EXISTS ranking_snapshot (
 
 CREATE INDEX IF NOT EXISTS idx_ranking_ticker_data
     ON ranking_snapshot(ticker, data_calculo);
+
+-- Jobs de backtest de carteira: o cálculo baixa/processa arquivos anuais
+-- inteiros da B3 (pode levar minutos na primeira vez, sem cache), o que
+-- não cabe dentro do timeout do proxy do Railway se rodado de forma
+-- síncrona numa única requisição HTTP. Por isso POST /backtest/carteira
+-- só cria uma linha aqui e devolve na hora; o cálculo roda em segundo
+-- plano (FastAPI BackgroundTasks) e atualiza esta linha ao terminar —
+-- GET /backtest/carteira/{id} consulta o status/resultado.
+CREATE TABLE IF NOT EXISTS backtest_job (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,  -- 'processando' | 'concluido' | 'erro'
+    criado_em TEXT NOT NULL,
+    concluido_em TEXT,
+    parametros_json TEXT NOT NULL,
+    resultado_json TEXT,
+    erro TEXT
+);
 """
 
 

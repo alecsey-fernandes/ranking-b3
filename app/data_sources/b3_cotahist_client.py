@@ -29,8 +29,10 @@ valor publicado no site da B3 ou em qualquer corretora.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
+import time
 import zipfile
 from datetime import date
 from pathlib import Path
@@ -196,12 +198,25 @@ def parsear_cotacoes_streaming(
 async def buscar_cotacoes_ano(ano: int, tickers: list[str]) -> dict[tuple[str, date], float]:
     """Baixa (ou usa cache) o arquivo anual e retorna as cotações de
     fechamento de cada (ticker, data) do ano inteiro para os tickers
-    pedidos. Processa em streaming (linha a linha) do início ao fim —
-    nunca carrega o arquivo inteiro (todos os papéis do ano) em memória
-    de uma vez, o que evitaria estourar RAM em hospedagens modestas."""
+    pedidos. O parsing (linha a linha, de TODOS os papéis do ano — não só
+    os pedidos) é bem mais pesado em CPU do que em rede: roda em thread
+    separada (`asyncio.to_thread`) para não travar o event loop enquanto
+    processa, permitindo que outras requisições (ex: consulta de status
+    de um job de backtest em andamento) continuem sendo atendidas."""
     caminho_zip = await _baixar_zip_ano(ano)
-    linhas = _iterar_linhas_do_zip(caminho_zip, ano)
-    return parsear_cotacoes_streaming(linhas, set(tickers))
+    tickers_desejados = set(tickers)
+
+    def _parsear() -> dict[tuple[str, date], float]:
+        linhas = _iterar_linhas_do_zip(caminho_zip, ano)
+        return parsear_cotacoes_streaming(linhas, tickers_desejados)
+
+    inicio = time.monotonic()
+    resultado = await asyncio.to_thread(_parsear)
+    logger.info(
+        "COTAHIST %d processado em %.1fs (%d tickers pedidos, %d cotações encontradas)",
+        ano, time.monotonic() - inicio, len(tickers_desejados), len(resultado),
+    )
+    return resultado
 
 
 def preco_mais_recente_por_ticker(

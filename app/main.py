@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
+import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.analysis.consistencia import calcular_consistencia_lucro
@@ -22,7 +24,14 @@ from app.data_sources.cvm_fca_client import CvmFcaClientError, inspecionar_valor
 from app.data_sources.cvm_fre_client import CvmFreClientError, inspecionar_arquivo_fre, listar_arquivos_fre
 from app.data_sources.ticker_mapping import TICKER_PARA_CNPJ
 from app.db.connection import get_connection
-from app.db.repository import buscar_evolucao_ranking, buscar_historico_indicadores
+from app.db.repository import (
+    buscar_backtest_job,
+    buscar_evolucao_ranking,
+    buscar_historico_indicadores,
+    concluir_backtest_job,
+    criar_backtest_job,
+    falhar_backtest_job,
+)
 from app.jobs.atualizar_precos_b3 import atualizar_precos_b3
 from app.jobs.importar_cvm import importar_lucro_historico_cvm
 from app.jobs.scheduler import coletar_e_persistir, iniciar_scheduler
@@ -36,6 +45,7 @@ from app.strategies.peg_lynch import PegLynchStrategy
 from app.strategies.piotroski import PiotroskiStrategy
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Ranking B3 - Análise Fundamentalista",
@@ -325,8 +335,8 @@ async def evolucao_ranking_empresa(ticker: str, limite: int = 40):
     return {"ticker": ticker.upper(), "total_snapshots": len(evolucao), "evolucao": evolucao}
 
 
-@app.post("/backtest/carteira")
-async def backtest_carteira(payload: CarteiraBacktestRequest):
+@app.post("/backtest/carteira", status_code=202)
+async def backtest_carteira(payload: CarteiraBacktestRequest, background_tasks: BackgroundTasks):
     """
     Simula o retorno de uma carteira desde uma data de início escolhida
     até hoje: para cada ticker, busca o preço de fechamento oficial da
@@ -334,21 +344,23 @@ async def backtest_carteira(payload: CarteiraBacktestRequest):
     logo depois, se cair em fim de semana/feriado) e o preço mais
     recente disponível, e calcula quanto o valor investido teria virado.
 
-    Não depende de nenhuma coleta prévia de preço — busca as cotações
-    direto na B3 a cada chamada (com cache local em disco por ano). Já
-    os dividendos por ação usam o que já estiver persistido via
-    `/coleta/cvm/lucro-historico` (rode antes para os tickers/anos do
-    período, senão os dividendos desses anos ficam de fora do cálculo).
+    ⚠️ Roda em SEGUNDO PLANO: baixar e processar o arquivo COTAHIST de
+    um ano inteiro (todos os papéis negociados na B3, não só os pedidos)
+    pode levar bastante tempo na primeira vez (sem cache) — tempo demais
+    para caber dentro do timeout do proxy do Railway numa única
+    requisição síncrona. Por isso este endpoint devolve NA HORA (202) um
+    `job_id`; consulte o resultado em `GET /backtest/carteira/{job_id}`
+    (repita a consulta a cada alguns segundos até `status` virar
+    `concluido` ou `erro`).
 
-    Etapa 2: dividendos/JCP agora sempre entram no cálculo —
-    `reinvestir_dividendos` escolhe se viram caixa acumulado (padrão)
-    ou são reinvestidos em novas ações. Desdobramentos/grupamentos no
-    período podem ser informados por ticker em `eventos_societarios`
-    (sem isso, o resultado fica distorcido para quem passou por um
-    evento desses). A resposta traz tanto a rentabilidade total (com
-    dividendos) quanto a rentabilidade só de preço, lado a lado, para
-    comparação. Ver `app/backtest/calculo.py` para o detalhe das
-    limitações e os próximos passos planejados.
+    Etapa 2: dividendos/JCP sempre entram no cálculo —
+    `reinvestir_dividendos` escolhe se viram caixa acumulado (padrão,
+    mais rápido: não precisa baixar cotação extra nenhuma) ou são
+    reinvestidos em novas ações (mais lento: busca o preço de fechamento
+    do fim de cada ano com dividendo, para cada ticker). Desdobramentos/
+    grupamentos/bonificações no período podem ser informados por ticker
+    em `eventos_societarios`. Ver `app/backtest/calculo.py` para o
+    detalhe das limitações.
     """
     itens = [
         ItemCarteira(
@@ -360,13 +372,52 @@ async def backtest_carteira(payload: CarteiraBacktestRequest):
         )
         for item in payload.itens
     ]
+
+    job_id = str(uuid.uuid4())
+    with get_connection() as conn:
+        criar_backtest_job(conn, job_id, payload.model_dump_json())
+
+    background_tasks.add_task(_executar_backtest_em_background, job_id, itens, payload)
+
+    return {
+        "job_id": job_id,
+        "status": "processando",
+        "consulte_em": f"/backtest/carteira/{job_id}",
+        "aviso": (
+            "O cálculo roda em segundo plano e pode levar de segundos a alguns minutos "
+            "na primeira vez (sem cache local do ano pedido). Consulte o job_id acima "
+            "em GET /backtest/carteira/{job_id} até o status virar 'concluido' ou 'erro'."
+        ),
+    }
+
+
+async def _executar_backtest_em_background(job_id: str, itens: list[ItemCarteira], payload: CarteiraBacktestRequest) -> None:
+    """Executado pelo BackgroundTasks depois da resposta do POST já ter
+    sido enviada — atualiza a linha do job em `backtest_job` ao terminar
+    (sucesso ou erro), nunca deixa um job travado em 'processando'."""
     try:
         resultado = await calcular_backtest_carteira(
             itens, payload.data_inicio, reinvestir_dividendos=payload.reinvestir_dividendos
         )
+        resposta = resultado_para_dict(resultado)
+        resposta["nome_carteira"] = payload.nome_carteira
+        with get_connection() as conn:
+            concluir_backtest_job(conn, job_id, json.dumps(resposta))
     except BacktestError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        with get_connection() as conn:
+            falhar_backtest_job(conn, job_id, str(exc))
+    except Exception as exc:  # noqa: BLE001 — nunca deixar o job travado por um erro inesperado
+        logger.exception("Erro inesperado no job de backtest %s", job_id)
+        with get_connection() as conn:
+            falhar_backtest_job(conn, job_id, f"Erro inesperado: {exc}")
 
-    resposta = resultado_para_dict(resultado)
-    resposta["nome_carteira"] = payload.nome_carteira
-    return resposta
+
+@app.get("/backtest/carteira/{job_id}")
+async def status_backtest_carteira(job_id: str):
+    """Consulta o status/resultado de um job criado por POST
+    /backtest/carteira. `status`: 'processando', 'concluido' ou 'erro'."""
+    with get_connection() as conn:
+        job = buscar_backtest_job(conn, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job de backtest '{job_id}' não encontrado.")
+    return job

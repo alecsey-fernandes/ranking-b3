@@ -150,6 +150,30 @@ def test_dividendo_sem_reinvestir_vira_caixa_acumulado():
     assert ri.valor_atual_somente_preco == 100 * 12.0  # coluna de comparação, sem dividendo
 
 
+def test_dividendo_sem_preco_de_fim_de_ano_ainda_vira_caixa_quando_nao_reinveste():
+    # Sem `precos_fim_de_ano` informado (caso real quando reinvestir_dividendos=False,
+    # que agora pula essa busca de propósito) — o dividendo ainda deve ser
+    # contabilizado como caixa, usando 31/dez como data aproximada do evento.
+    cotacoes_ano_inicio = {("DIV3", date(2023, 1, 2)): 10.0}
+    precos_atuais = {"DIV3": (date(2026, 7, 21), 12.0)}
+    dividendos_por_ticker = {"DIV3": {2023: 1.0}}
+
+    resultado = montar_resultado_backtest(
+        itens=[ItemCarteira(ticker="DIV3", quantidade=100)],
+        data_inicio=date(2023, 1, 2),
+        cotacoes_ano_inicio=cotacoes_ano_inicio,
+        precos_atuais=precos_atuais,
+        reinvestir_dividendos=False,
+        dividendos_por_ticker=dividendos_por_ticker,
+        precos_fim_de_ano={},  # de propósito: simula não ter buscado nenhum preço extra
+    )
+
+    ri = resultado.itens[0]
+    assert ri.dividendos_recebidos == 100.0
+    assert ri.quantidade_final == 100
+    assert ri.valor_atual == 100 * 12.0 + 100.0
+
+
 def test_dividendo_reinvestido_compra_acoes_no_preco_do_evento():
     cotacoes_ano_inicio = {("DIV3", date(2023, 1, 2)): 10.0}
     precos_atuais = {"DIV3": (date(2026, 7, 21), 12.0)}
