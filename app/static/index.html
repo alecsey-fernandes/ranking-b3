@@ -327,9 +327,16 @@
   </div>
 
   <div class="card" id="resultCard" style="display:none;">
-    <h2>Resultado</h2>
-    <p class="hint" id="resultHint"></p>
-    <table>
+    <div class="row" style="align-items:center; margin-bottom: 0;">
+      <div style="flex: 3;">
+        <h2 style="margin:0;">Resultado</h2>
+        <p class="hint" id="resultHint" style="margin-bottom:0;"></p>
+      </div>
+      <div>
+        <button class="btn-secondary" id="btnBacktest">BackTest desta carteira →</button>
+      </div>
+    </div>
+    <table style="margin-top:14px;">
       <thead>
         <tr>
           <th>#</th>
@@ -384,6 +391,17 @@ const NOMES_ESTRATEGIA = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+// Ranking mais recente gerado nesta página — usado pelo botão "BackTest
+// desta carteira" para levar os tickers (na mesma ordem) pra segunda
+// página, via sessionStorage (só dura a sessão do navegador).
+let ultimoRanking = null;
+
+function irParaBacktest() {
+  if (!ultimoRanking || ultimoRanking.length === 0) return;
+  sessionStorage.setItem("backtestRanking", JSON.stringify(ultimoRanking));
+  window.location.href = "/backtest";
+}
 
 function parseTickers(raw) {
   return raw.split(",").map(t => t.trim().toUpperCase()).filter(Boolean);
@@ -580,6 +598,7 @@ async function gerarRanking() {
       `${data.total_no_ranking} de ${data.total_empresas_com_dados_completos} empresa(s) com dados completos entraram no ranking. Clique numa linha para ver o detalhe por estratégia.`;
     renderRanking(data.ranking);
     $("resultCard").style.display = "block";
+    ultimoRanking = data.ranking;
 
   } catch (err) {
     showFeedback(fb, "error", "Erro de conexão com a API: " + err.message);
@@ -643,6 +662,7 @@ async function rodarColeta({ precos, fundamentos }) {
 }
 
 $("btnRanking").addEventListener("click", gerarRanking);
+$("btnBacktest").addEventListener("click", irParaBacktest);
 $("btnPrecos").addEventListener("click", () => rodarColeta({ precos: true, fundamentos: false }));
 $("btnFundamentos").addEventListener("click", () => rodarColeta({ precos: false, fundamentos: true }));
 $("btnCompleto").addEventListener("click", () => rodarColeta({ precos: true, fundamentos: true }));

@@ -137,6 +137,24 @@ def _achar_preco_inicio(
     return min(candidatos, key=lambda candidato: candidato[0])
 
 
+def _achar_preco_no_ou_antes(
+    cotacoes_ano: dict[tuple[str, date], float], ticker: str, data_alvo: date
+) -> tuple[date, float] | None:
+    """Acha o pregão mais recente do ticker NA data pedida ou ANTES dela
+    (dentro da janela de tolerância) — usado quando o usuário informa uma
+    `data_fim` explícita, em vez de sempre usar o pregão mais recente
+    disponível (ver `_buscar_preco_atual_com_fallback`)."""
+    limite_inferior = data_alvo - timedelta(days=JANELA_TOLERANCIA_DIAS_INICIO)
+    candidatos = [
+        (data_pregao, preco)
+        for (tk, data_pregao), preco in cotacoes_ano.items()
+        if tk == ticker and limite_inferior <= data_pregao <= data_alvo
+    ]
+    if not candidatos:
+        return None
+    return max(candidatos, key=lambda candidato: candidato[0])
+
+
 def _simular_posicao(
     quantidade_inicial: float,
     data_pregao_inicio: date,
@@ -370,15 +388,47 @@ async def _buscar_precos_fim_de_ano(
     return precos_fim_de_ano
 
 
+async def _buscar_preco_final(tickers: list[str], data_fim: date) -> dict[str, tuple[date, float]]:
+    """Busca o preço de cada ticker NA data_fim pedida ou no pregão
+    disponível mais próximo ANTES dela (dentro da janela de tolerância).
+    Se não achar nada no ano de data_fim (ex: data_fim é 2 de janeiro,
+    antes do 1º pregão do ano), recua para o fim do(s) ano(s) anterior(es)
+    — mesmo espírito do fallback de `_buscar_preco_atual_com_fallback`."""
+    faltando = set(tickers)
+    encontrados: dict[str, tuple[date, float]] = {}
+
+    for delta in range(ANOS_FALLBACK_PRECO_ATUAL + 1):
+        if not faltando:
+            break
+        ano = data_fim.year - delta
+        alvo_no_ano = data_fim if delta == 0 else date(ano, 12, 31)
+        try:
+            cotacoes = await buscar_cotacoes_ano(ano, list(faltando))
+        except B3ClientError as exc:
+            logger.warning("Falha ao buscar COTAHIST %d para preço de fim do backtest: %s", ano, exc)
+            continue
+        for ticker in list(faltando):
+            achado = _achar_preco_no_ou_antes(cotacoes, ticker, alvo_no_ano)
+            if achado:
+                encontrados[ticker] = achado
+                faltando.discard(ticker)
+
+    return encontrados
+
+
 async def calcular_backtest_carteira(
     itens: list[ItemCarteira],
     data_inicio: date,
     reinvestir_dividendos: bool = False,
+    data_fim: date | None = None,
     hoje: date | None = None,
 ) -> ResultadoBacktest:
     hoje = hoje or date.today()
-    if data_inicio > hoje:
-        raise BacktestError("Data de início não pode ser no futuro.")
+    if data_fim is not None and data_fim > hoje:
+        raise BacktestError("Data final não pode ser no futuro.")
+    data_fim_efetiva = data_fim or hoje
+    if data_inicio > data_fim_efetiva:
+        raise BacktestError("Data de início não pode ser depois da data final.")
     if not itens:
         raise BacktestError("A carteira precisa ter pelo menos um item.")
 
@@ -394,12 +444,15 @@ async def calcular_backtest_carteira(
     logger.info("Backtest: cotações do ano de início (%d) prontas em %.1fs", data_inicio.year, time.monotonic() - inicio_cronometro)
 
     inicio_cronometro = time.monotonic()
-    precos_atuais = await _buscar_preco_atual_com_fallback(tickers, hoje.year)
-    logger.info("Backtest: preço atual pronto em %.1fs", time.monotonic() - inicio_cronometro)
+    if data_fim is not None:
+        precos_atuais = await _buscar_preco_final(tickers, data_fim)
+    else:
+        precos_atuais = await _buscar_preco_atual_com_fallback(tickers, hoje.year)
+    logger.info("Backtest: preço final pronto em %.1fs", time.monotonic() - inicio_cronometro)
 
     with get_connection() as conn:
         dividendos_por_ticker = {
-            ticker: buscar_dividendos_por_ano(conn, ticker, data_inicio.year, hoje.year) for ticker in tickers
+            ticker: buscar_dividendos_por_ano(conn, ticker, data_inicio.year, data_fim_efetiva.year) for ticker in tickers
         }
 
     # Preço de fim de ano só é necessário para VALORIZAR o reinvestimento
@@ -410,7 +463,7 @@ async def calcular_backtest_carteira(
     precos_fim_de_ano: dict[str, dict[int, tuple[date, float]]] = {}
     if reinvestir_dividendos:
         precos_fim_de_ano = await _buscar_precos_fim_de_ano(
-            tickers, dividendos_por_ticker, cotacoes_ano_inicio, precos_atuais, data_inicio.year, hoje.year
+            tickers, dividendos_por_ticker, cotacoes_ano_inicio, precos_atuais, data_inicio.year, data_fim_efetiva.year
         )
 
     return montar_resultado_backtest(

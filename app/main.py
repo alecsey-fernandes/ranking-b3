@@ -28,6 +28,7 @@ from app.db.repository import (
     buscar_backtest_job,
     buscar_evolucao_ranking,
     buscar_historico_indicadores,
+    buscar_ultimo_preco_valido,
     concluir_backtest_job,
     criar_backtest_job,
     falhar_backtest_job,
@@ -109,6 +110,11 @@ _DIR_STATIC = Path(__file__).parent / "static"
 @app.get("/", include_in_schema=False)
 async def dashboard():
     return FileResponse(_DIR_STATIC / "index.html")
+
+
+@app.get("/backtest", include_in_schema=False)
+async def pagina_backtest():
+    return FileResponse(_DIR_STATIC / "backtest.html")
 
 
 # Universo padrão do MVP: lista pequena e fixa para validar o pipeline.
@@ -245,6 +251,29 @@ async def obter_pesos_padrao():
     carga — para customizar, veja os parâmetros `peso_*` de /ranking e
     /ranking/dados-gratuitos."""
     return pesos_padrao.model_dump()
+
+
+@app.get("/precos/atual")
+async def obter_precos_atuais(
+    tickers: list[str] = Query(..., description="Tickers para consultar o último preço já persistido"),
+):
+    """
+    Último preço de fechamento já persistido de cada ticker (via
+    `/coleta/b3/precos` ou `/coleta/executar`) — leitura pura do banco,
+    não baixa nada da B3 na hora. Usado pela tela de BackTest para
+    mostrar a cotação ao lado do campo de quantidade de cada ticker.
+    Tickers sem preço persistido ainda voltam com `preco: null`.
+    """
+    resultado = {}
+    with get_connection() as conn:
+        for ticker in dict.fromkeys(t.upper() for t in tickers):  # dedup preservando ordem
+            snapshot = buscar_ultimo_preco_valido(conn, ticker)
+            resultado[ticker] = (
+                {"preco": snapshot["preco_atual"], "data_referencia": snapshot["data_referencia"]}
+                if snapshot
+                else {"preco": None, "data_referencia": None}
+            )
+    return resultado
 
 
 @app.get("/ranking")
@@ -410,10 +439,12 @@ async def evolucao_ranking_empresa(ticker: str, limite: int = 40):
 async def backtest_carteira(payload: CarteiraBacktestRequest, background_tasks: BackgroundTasks):
     """
     Simula o retorno de uma carteira desde uma data de início escolhida
-    até hoje: para cada ticker, busca o preço de fechamento oficial da
-    B3 (COTAHIST) na data de início (ou no primeiro pregão disponível
-    logo depois, se cair em fim de semana/feriado) e o preço mais
-    recente disponível, e calcula quanto o valor investido teria virado.
+    até uma data final (hoje, ou o pregão mais recente disponível, se
+    `data_fim` não for informado): para cada ticker, busca o preço de
+    fechamento oficial da B3 (COTAHIST) na data de início (ou no primeiro
+    pregão disponível logo depois, se cair em fim de semana/feriado) e o
+    preço na data final (ou no último pregão disponível antes dela), e
+    calcula quanto o valor investido teria virado.
 
     ⚠️ Roda em SEGUNDO PLANO: baixar e processar o arquivo COTAHIST de
     um ano inteiro (todos os papéis negociados na B3, não só os pedidos)
@@ -468,10 +499,11 @@ async def _executar_backtest_em_background(job_id: str, itens: list[ItemCarteira
     (sucesso ou erro), nunca deixa um job travado em 'processando'."""
     try:
         resultado = await calcular_backtest_carteira(
-            itens, payload.data_inicio, reinvestir_dividendos=payload.reinvestir_dividendos
+            itens, payload.data_inicio, reinvestir_dividendos=payload.reinvestir_dividendos, data_fim=payload.data_fim
         )
         resposta = resultado_para_dict(resultado)
         resposta["nome_carteira"] = payload.nome_carteira
+        resposta["data_fim_pedida"] = payload.data_fim.isoformat() if payload.data_fim else None
         with get_connection() as conn:
             concluir_backtest_job(conn, job_id, json.dumps(resposta))
     except BacktestError as exc:

@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.backtest.calculo import EventoSocietario, ItemCarteira, montar_resultado_backtest
+from app.backtest.calculo import EventoSocietario, ItemCarteira, _achar_preco_no_ou_antes, montar_resultado_backtest
 
 
 def test_calcula_rentabilidade_positiva_de_um_ticker():
@@ -194,3 +194,15 @@ def test_dividendo_reinvestido_compra_acoes_no_preco_do_evento():
     acoes_compradas = 100.0 / 11.0  # caixa recebido / preço do pregão de fim de 2023
     assert abs(ri.quantidade_final - (100 + acoes_compradas)) < 1e-9
     assert abs(ri.valor_atual - (100 + acoes_compradas) * 12.0) < 1e-9
+
+
+def test_achar_preco_no_ou_antes_pega_pregao_mais_recente_disponivel():
+    cotacoes = {
+        ("PETR4", date(2024, 6, 10)): 35.0,
+        ("PETR4", date(2024, 6, 14)): 36.0,
+        ("PETR4", date(2024, 6, 17)): 37.0,
+    }
+    # 16/06/2024 é domingo, sem pregão: deve cair pro pregão anterior (14/06)
+    assert _achar_preco_no_ou_antes(cotacoes, "PETR4", date(2024, 6, 16)) == (date(2024, 6, 14), 36.0)
+    # data com pregão exato: usa o dela mesmo, não recua
+    assert _achar_preco_no_ou_antes(cotacoes, "PETR4", date(2024, 6, 17)) == (date(2024, 6, 17), 37.0)

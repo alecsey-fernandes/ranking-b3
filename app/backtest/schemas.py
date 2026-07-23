@@ -86,6 +86,13 @@ class CarteiraBacktestRequest(BaseModel):
     data_inicio: date = Field(
         ..., description="Data em que a carteira teria sido montada (AAAA-MM-DD)"
     )
+    data_fim: date | None = Field(
+        default=None,
+        description=(
+            "Data final do backtest (AAAA-MM-DD, opcional). Se não informado, usa o "
+            "pregão disponível mais recente (hoje ou o último dia útil com cotação)."
+        ),
+    )
     itens: list[ItemCarteiraRequest] = Field(
         ..., min_length=1, description="Composição da carteira: tickers e quantidades"
     )
