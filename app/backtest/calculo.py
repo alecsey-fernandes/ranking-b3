@@ -29,11 +29,14 @@ Etapa 2 (esta versão) — o que mudou desde a etapa 1:
   antes de aplicar qualquer dividendo que tenha vindo depois.
 
 ⚠️ Limitações conhecidas:
-- Eventos societários (splits) são informados MANUALMENTE pelo usuário
-  nesta etapa — não existe ainda fonte gratuita automática confirmada
-  para isso na plataforma (mesma cautela já aplicada a outras fontes CVM
-  ainda não confirmadas). Sem essa informação, o backtest fica distorcido
-  para tickers que passaram por um evento desses no período.
+- Eventos societários (splits/bonificações) chegam já prontos em
+  `ItemCarteira.eventos_societarios` — quem decide a origem é o chamador
+  (ver `_mesclar_eventos_societarios` em app/main.py): combina os já
+  persistidos automaticamente (tabela `evento_societario`, hoje vazia —
+  aguardando confirmação de fonte gratuita via CVM/FRE, mesma cautela já
+  aplicada a outras fontes CVM) com os informados manualmente no payload
+  (que têm prioridade na mesma data, servindo de correção). Este módulo
+  em si é agnóstico à origem — só aplica a lista que recebe.
 - O valor anual de dividendo por ação vem da importação CVM (agregado do
   ano fiscal, ligado a 31/dez) — não das datas reais de pagamento/JCP.
   O preço usado para "comprar" as ações reinvestidas é o do último pregão

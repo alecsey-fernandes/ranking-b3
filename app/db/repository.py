@@ -292,6 +292,36 @@ def buscar_dividendos_por_ano(
     return {int(row["data_referencia"][:4]): row["dividendo_por_acao"] for row in cursor.fetchall()}
 
 
+def buscar_eventos_societarios(conn: sqlite3.Connection, ticker: str) -> list[dict]:
+    """Eventos societários (desdobramento/grupamento/bonificação) já
+    persistidos para um ticker, mais antigo primeiro. Vazio até algum job
+    de importação popular `evento_societario` (ver connection.py) — o
+    backtest simplesmente não aplica nada automático nesse caso."""
+    cursor = conn.execute(
+        "SELECT data_evento, tipo, fator, fonte FROM evento_societario WHERE ticker = ? ORDER BY data_evento",
+        (ticker,),
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def salvar_eventos_societarios(conn: sqlite3.Connection, ticker: str, eventos: list[dict]) -> int:
+    """Persiste eventos societários de um ticker. `eventos`: lista de
+    {"data": date, "tipo": str, "fator": float}. INSERT OR REPLACE pela
+    chave (ticker, data_evento, tipo) — reimportar o mesmo ano/ticker
+    atualiza em vez de duplicar. Devolve quantos eventos foram gravados."""
+    gravados = 0
+    for evento in eventos:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO evento_societario (ticker, data_evento, tipo, fator, fonte)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (ticker, evento["data"].isoformat(), evento["tipo"], evento["fator"], evento.get("fonte", "cvm_fre")),
+        )
+        gravados += 1
+    return gravados
+
+
 def criar_backtest_job(conn: sqlite3.Connection, job_id: str, parametros_json: str) -> None:
     """Registra um job de backtest recém-criado com status 'processando'.
     Chamado no handler do POST /backtest/carteira, antes de agendar o

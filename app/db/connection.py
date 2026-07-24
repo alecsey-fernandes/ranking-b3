@@ -86,7 +86,27 @@ CREATE TABLE IF NOT EXISTS ranking_snapshot (
 CREATE INDEX IF NOT EXISTS idx_ranking_ticker_data
     ON ranking_snapshot(ticker, data_calculo);
 
--- Jobs de backtest de carteira: o cálculo baixa/processa arquivos anuais
+-- Eventos societários (desdobramento/grupamento/bonificação) por ticker,
+-- usados para AJUSTAR AUTOMATICAMENTE a quantidade de ações no backtest de
+-- carteira (app/backtest/calculo.py), sem o usuário precisar informar
+-- manualmente. Fonte planejada: Formulário de Referência da CVM, item
+-- 17.3 do Anexo 24 da ICVM 480 (mesmo zip já usado para dividendos em
+-- cvm_fre_client.py) — AINDA NÃO POPULADA POR NENHUM JOB (ver
+-- app/jobs/importar_cvm.py): aguardando confirmação do nome real da
+-- coluna via /diagnostico/cvm/fre-arquivo, mesma cautela já aplicada a
+-- outras fontes CVM. Enquanto vazia, o backtest simplesmente não aplica
+-- nenhum evento automático — comportamento idêntico ao de antes desta
+-- tabela existir. `fonte` distingue eventos importados automaticamente
+-- de eventuais correções manuais que venham a ser inseridas depois.
+CREATE TABLE IF NOT EXISTS evento_societario (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    data_evento TEXT NOT NULL,
+    tipo TEXT NOT NULL,  -- 'desdobramento' | 'grupamento' | 'bonificacao'
+    fator REAL NOT NULL,
+    fonte TEXT NOT NULL DEFAULT 'cvm_fre',
+    UNIQUE(ticker, data_evento, tipo)
+);
 -- inteiros da B3 (pode levar minutos na primeira vez, sem cache), o que
 -- não cabe dentro do timeout do proxy do Railway se rodado de forma
 -- síncrona numa única requisição HTTP. Por isso POST /backtest/carteira

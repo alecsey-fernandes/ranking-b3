@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import date
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
@@ -26,6 +27,7 @@ from app.data_sources.ticker_mapping import TICKER_PARA_CNPJ
 from app.db.connection import get_connection
 from app.db.repository import (
     buscar_backtest_job,
+    buscar_eventos_societarios,
     buscar_evolucao_ranking,
     buscar_historico_indicadores,
     buscar_ultimo_preco_valido,
@@ -435,6 +437,28 @@ async def evolucao_ranking_empresa(ticker: str, limite: int = 40):
     return {"ticker": ticker.upper(), "total_snapshots": len(evolucao), "evolucao": evolucao}
 
 
+def _mesclar_eventos_societarios(ticker: str, eventos_manuais: list) -> list[EventoSocietario]:
+    """
+    Combina os eventos societários já persistidos automaticamente (ver
+    `evento_societario` em connection.py — hoje vazia, aguardando job de
+    importação confirmado) com os informados manualmente no payload.
+    Quando os dois têm um evento na MESMA data, o manual prevalece (serve
+    de correção/override caso a fonte automática esteja errada ou
+    incompleta para aquele ticker específico).
+    """
+    with get_connection() as conn:
+        persistidos = buscar_eventos_societarios(conn, ticker.upper())
+
+    datas_manuais = {evento.data for evento in eventos_manuais}
+    automaticos = [
+        EventoSocietario(data=date.fromisoformat(row["data_evento"]), fator=row["fator"])
+        for row in persistidos
+        if date.fromisoformat(row["data_evento"]) not in datas_manuais
+    ]
+    manuais = [EventoSocietario(data=evento.data, fator=evento.fator) for evento in eventos_manuais]
+    return sorted(automaticos + manuais, key=lambda evento: evento.data)
+
+
 @app.post("/backtest/carteira", status_code=202)
 async def backtest_carteira(payload: CarteiraBacktestRequest, background_tasks: BackgroundTasks):
     """
@@ -460,17 +484,19 @@ async def backtest_carteira(payload: CarteiraBacktestRequest, background_tasks: 
     mais rápido: não precisa baixar cotação extra nenhuma) ou são
     reinvestidos em novas ações (mais lento: busca o preço de fechamento
     do fim de cada ano com dividendo, para cada ticker). Desdobramentos/
-    grupamentos/bonificações no período podem ser informados por ticker
-    em `eventos_societarios`. Ver `app/backtest/calculo.py` para o
-    detalhe das limitações.
+    grupamentos/bonificações já persistidos automaticamente (ver
+    `evento_societario`) são aplicados sem precisar informar nada — hoje
+    essa tabela ainda está vazia, aguardando confirmação de uma fonte
+    gratuita (CVM/FRE); enquanto isso, `eventos_societarios` no payload
+    continua funcionando manualmente e tem prioridade sobre qualquer
+    evento automático na mesma data (serve de correção). Ver
+    `app/backtest/calculo.py` para o detalhe das limitações.
     """
     itens = [
         ItemCarteira(
             ticker=item.ticker,
             quantidade=item.quantidade,
-            eventos_societarios=[
-                EventoSocietario(data=evento.data, fator=evento.fator) for evento in (item.eventos_societarios or [])
-            ],
+            eventos_societarios=_mesclar_eventos_societarios(item.ticker, item.eventos_societarios or []),
         )
         for item in payload.itens
     ]
