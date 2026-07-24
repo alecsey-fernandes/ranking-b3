@@ -1,6 +1,12 @@
 from datetime import date
 
-from app.backtest.calculo import EventoSocietario, ItemCarteira, _achar_preco_no_ou_antes, montar_resultado_backtest
+from app.backtest.calculo import (
+    EventoSocietario,
+    ItemCarteira,
+    _achar_preco_no_ou_antes,
+    detectar_candidatos_eventos_societarios,
+    montar_resultado_backtest,
+)
 
 
 def test_calcula_rentabilidade_positiva_de_um_ticker():
@@ -206,3 +212,39 @@ def test_achar_preco_no_ou_antes_pega_pregao_mais_recente_disponivel():
     assert _achar_preco_no_ou_antes(cotacoes, "PETR4", date(2024, 6, 16)) == (date(2024, 6, 14), 36.0)
     # data com pregão exato: usa o dela mesmo, não recua
     assert _achar_preco_no_ou_antes(cotacoes, "PETR4", date(2024, 6, 17)) == (date(2024, 6, 17), 37.0)
+
+
+def test_deteccao_pega_bonificacao_pequena_estilo_beef3():
+    # BEEF3 em 30/04/2025: fator real 1129/1000 = 1.129 -> preço cai ~11,4%
+    serie = [
+        (date(2025, 4, 29), 10.00),
+        (date(2025, 4, 30), 10.00 / 1.129),  # ~8.86
+        (date(2025, 5, 2), 8.90),
+    ]
+    candidatos = detectar_candidatos_eventos_societarios(serie)
+    assert len(candidatos) == 1
+    candidato = candidatos[0]
+    assert candidato["data"] == date(2025, 4, 30)
+    assert candidato["variacao_pct"] < -8.0  # queda de ~11,4%, acima do limiar de 8%
+    assert abs(candidato["fator_sugerido"] - 1.129) < 0.01
+
+
+def test_deteccao_ignora_variacao_normal_do_dia_a_dia():
+    serie = [
+        (date(2024, 1, 2), 10.00),
+        (date(2024, 1, 3), 10.30),  # +3%, dentro do normal
+        (date(2024, 1, 4), 9.90),   # -3,9%, dentro do normal
+    ]
+    assert detectar_candidatos_eventos_societarios(serie) == []
+
+
+def test_deteccao_nao_repete_alerta_de_evento_ja_conhecido():
+    serie = [
+        (date(2024, 6, 2), 40.00),
+        (date(2024, 6, 3), 20.00),  # desdobramento 1:2 -> cai 50%
+    ]
+    # sem eventos conhecidos -> detecta
+    assert len(detectar_candidatos_eventos_societarios(serie)) == 1
+    # já sabendo do evento nessa data -> não alerta de novo
+    ja_conhecido = [EventoSocietario(data=date(2024, 6, 3), fator=2.0)]
+    assert detectar_candidatos_eventos_societarios(serie, ja_conhecido) == []

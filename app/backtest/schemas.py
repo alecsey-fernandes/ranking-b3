@@ -68,6 +68,32 @@ class ItemCarteiraRequest(BaseModel):
     )
 
 
+class ConfirmarEventoSocietarioRequest(BaseModel):
+    """
+    Registra um evento societário JÁ CONFIRMADO externamente pelo usuário
+    — normalmente depois de um alerta gerado pela detecção automática por
+    heurística em POST /backtest/carteira (`alertas_eventos_societarios`
+    na resposta). Uma vez salvo, passa a ser aplicado automaticamente em
+    qualquer backtest futuro desse ticker, sem precisar informar de novo
+    (ver `_mesclar_eventos_societarios` em app/main.py).
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {"ticker": "BEEF3", "data": "2025-04-30", "tipo": "bonificacao", "fator": 1.129}
+        }
+    )
+
+    ticker: str = Field(..., description="Código de negociação do ativo, ex: BEEF3")
+    data: date = Field(..., description="Data em que o evento passou a valer")
+    tipo: str = Field(..., description="'desdobramento', 'grupamento' ou 'bonificacao' — só para registro, não afeta o cálculo")
+    fator: float = Field(
+        ...,
+        gt=0,
+        description="Fator multiplicativo sobre a quantidade de ações (ex: 1.129 para a bonificação de 1129/1000 da BEEF3)",
+    )
+
+
 class CarteiraBacktestRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={

@@ -28,15 +28,42 @@ Etapa 2 (esta versão) — o que mudou desde a etapa 1:
   (`eventos_societarios`) e são aplicados à quantidade na data certa,
   antes de aplicar qualquer dividendo que tenha vindo depois.
 
+Etapa 3 (esta versão) — o que mudou desde a etapa 2:
+- Detecção automática por HEURÍSTICA de possíveis desdobramentos/
+  grupamentos/bonificações: não existe fonte gratuita estruturada
+  confirmada pra isso (CVM/FRE foi investigado e descartado — a
+  documentação da CVM lista um item que não existe de fato nos arquivos
+  reais). Em vez disso, `detectar_candidatos_eventos_societarios` varre
+  a série de preços já baixada e sinaliza saltos de preço fora do normal
+  entre pregões consecutivos como CANDIDATOS — nunca aplica nada
+  automaticamente no cálculo, só devolve um alerta (`alertas_eventos_societarios`
+  no resultado) para o usuário confirmar externamente (RI da empresa,
+  aviso da B3) e registrar via `POST /eventos-societarios/confirmar`
+  se for real. Uma vez confirmado e salvo, o evento some dos alertas
+  futuros e passa a ser aplicado automaticamente (ver
+  `_mesclar_eventos_societarios` em app/main.py).
+
 ⚠️ Limitações conhecidas:
 - Eventos societários (splits/bonificações) chegam já prontos em
   `ItemCarteira.eventos_societarios` — quem decide a origem é o chamador
   (ver `_mesclar_eventos_societarios` em app/main.py): combina os já
-  persistidos automaticamente (tabela `evento_societario`, hoje vazia —
-  aguardando confirmação de fonte gratuita via CVM/FRE, mesma cautela já
-  aplicada a outras fontes CVM) com os informados manualmente no payload
-  (que têm prioridade na mesma data, servindo de correção). Este módulo
-  em si é agnóstico à origem — só aplica a lista que recebe.
+  persistidos automaticamente (tabela `evento_societario`, populada por
+  confirmação manual após alerta — ver Etapa 3 acima) com os informados
+  manualmente no payload (que têm prioridade na mesma data, servindo de
+  correção). Este módulo em si é agnóstico à origem — só aplica a lista
+  que recebe.
+- A detecção por heurística só enxerga saltos de preço nos anos cujo
+  arquivo COTAHIST já foi baixado para outro fim (ano de início e ano de
+  fim do período pedido) — um evento no MEIO do período, num ano que não
+  precisou ser baixado por nenhum outro motivo, não é detectado nesta
+  etapa. Baixar todos os anos intermediários só para detecção multiplicaria
+  o custo de cada backtest; fica como possível próxima etapa se isso se
+  mostrar um problema na prática.
+- O limiar de detecção (8% de variação dia-a-dia) é sensível de propósito
+  para pegar bonificações pequenas (ex: BEEF3 em 30/04/2025, fator
+  1129/1000 ≈ 1,129, um salto de preço de ~11,4%) — o que também gera
+  falsos positivos em papéis voláteis com alta/queda real forte num dia
+  só. Por isso o alerta nunca é aplicado sozinho no cálculo.
 - O valor anual de dividendo por ação vem da importação CVM (agregado do
   ano fiscal, ligado a 31/dez) — não das datas reais de pagamento/JCP.
   O preço usado para "comprar" as ações reinvestidas é o do último pregão
@@ -71,6 +98,14 @@ logger = logging.getLogger(__name__)
 
 JANELA_TOLERANCIA_DIAS_INICIO = 10
 ANOS_FALLBACK_PRECO_ATUAL = 2
+
+# Variação de preço dia-a-dia (em módulo) acima da qual um pregão vira
+# candidato a desdobramento/grupamento/bonificação para efeito de ALERTA
+# (nunca aplicado automaticamente — ver detectar_candidatos_eventos_societarios
+# e a Etapa 3 no docstring do módulo). 8% pega bonificações pequenas como a
+# da BEEF3 (30/04/2025, fator 1129/1000, salto de ~11,4%) com margem, ao
+# custo de mais falsos positivos em papéis voláteis.
+LIMIAR_VARIACAO_SUSPEITA_EVENTO = 0.08
 
 
 class BacktestError(Exception):
@@ -124,6 +159,53 @@ class ResultadoBacktest:
     valor_total_atual_somente_preco: float
     rentabilidade_total_pct_somente_preco: float | None
     tickers_com_problema: list[str]
+    alertas_eventos_societarios: dict[str, list[dict]] = field(default_factory=dict)
+
+
+def detectar_candidatos_eventos_societarios(
+    serie_precos: list[tuple[date, float]],
+    eventos_ja_conhecidos: list[EventoSocietario] | None = None,
+) -> list[dict]:
+    """
+    Varre uma série de (data, preço de fechamento) — não precisa vir
+    ordenada, a função ordena — e sinaliza saltos de preço dia-a-dia fora
+    do normal (ver LIMIAR_VARIACAO_SUSPEITA_EVENTO) como CANDIDATOS a
+    desdobramento/grupamento/bonificação. Função PURA: não baixa nada,
+    não aplica nada no cálculo — só devolve a lista de candidatos para o
+    chamador decidir o que fazer (ver Etapa 3 no docstring do módulo).
+
+    Pula datas que já têm um evento em `eventos_ja_conhecidos` (persistido
+    ou manual) — não repete alerta pra evento que já foi confirmado.
+
+    `fator_sugerido` é `preco_dia_anterior / preco_no_dia` — a mesma
+    convenção de `EventoSocietario.fator` (multiplica a quantidade): para
+    uma queda de preço (típica de desdobramento/bonificação) dá > 1; para
+    uma alta de preço (típica de grupamento) dá < 1. É só um palpite a
+    partir do salto de preço — o usuário decide se é real e qual o fator
+    exato depois de confirmar externamente.
+    """
+    eventos_ja_conhecidos = eventos_ja_conhecidos or []
+    datas_conhecidas = {evento.data for evento in eventos_ja_conhecidos}
+
+    serie_ordenada = sorted(serie_precos, key=lambda ponto: ponto[0])
+    candidatos: list[dict] = []
+
+    for (data_anterior, preco_anterior), (data_atual, preco_atual) in zip(serie_ordenada, serie_ordenada[1:]):
+        if not preco_anterior or not preco_atual or data_atual in datas_conhecidas:
+            continue
+        variacao_pct = (preco_atual / preco_anterior - 1) * 100
+        if abs(variacao_pct) >= LIMIAR_VARIACAO_SUSPEITA_EVENTO * 100:
+            candidatos.append(
+                {
+                    "data": data_atual,
+                    "preco_dia_anterior": preco_anterior,
+                    "preco_no_dia": preco_atual,
+                    "variacao_pct": round(variacao_pct, 2),
+                    "fator_sugerido": round(preco_anterior / preco_atual, 4),
+                }
+            )
+
+    return candidatos
 
 
 def _achar_preco_inicio(
@@ -226,9 +308,11 @@ def montar_resultado_backtest(
     reinvestir_dividendos: bool = False,
     dividendos_por_ticker: dict[str, dict[int, float]] | None = None,
     precos_fim_de_ano: dict[str, dict[int, tuple[date, float]]] | None = None,
+    alertas_eventos_societarios: dict[str, list[dict]] | None = None,
 ) -> ResultadoBacktest:
     dividendos_por_ticker = dividendos_por_ticker or {}
     precos_fim_de_ano = precos_fim_de_ano or {}
+    alertas_eventos_societarios = alertas_eventos_societarios or {}
 
     resultados: list[ResultadoItemBacktest] = []
     tickers_com_problema: list[str] = []
@@ -330,12 +414,23 @@ def montar_resultado_backtest(
         valor_total_atual_somente_preco=valor_total_atual_somente_preco,
         rentabilidade_total_pct_somente_preco=rentabilidade_total_pct_somente_preco,
         tickers_com_problema=tickers_com_problema,
+        alertas_eventos_societarios={
+            ticker: candidatos for ticker, candidatos in alertas_eventos_societarios.items() if candidatos
+        },
     )
 
 
-async def _buscar_preco_atual_com_fallback(tickers: list[str], ano_base: int) -> dict[str, tuple[date, float]]:
+async def _buscar_preco_atual_com_fallback(
+    tickers: list[str], ano_base: int
+) -> tuple[dict[str, tuple[date, float]], dict[tuple[str, date], float]]:
+    """Devolve (preço mais recente por ticker, TODAS as cotações brutas
+    baixadas nesse processo) — o segundo item é reaproveitado por
+    `detectar_candidatos_eventos_societarios` em vez de descartado, já
+    que baixar+processar o ano é o custo caro; extrair mais uma coisa
+    dele é grátis."""
     faltando = set(tickers)
     encontrados: dict[str, tuple[date, float]] = {}
+    cotacoes_brutas: dict[tuple[str, date], float] = {}
 
     for delta in range(ANOS_FALLBACK_PRECO_ATUAL + 1):
         if not faltando:
@@ -346,12 +441,13 @@ async def _buscar_preco_atual_com_fallback(tickers: list[str], ano_base: int) ->
         except B3ClientError as exc:
             logger.warning("Falha ao buscar COTAHIST %d para preço atual do backtest: %s", ano, exc)
             continue
+        cotacoes_brutas.update(cotacoes)
         for ticker, dado in preco_mais_recente_por_ticker(cotacoes).items():
             if ticker in faltando:
                 encontrados[ticker] = dado
                 faltando.discard(ticker)
 
-    return encontrados
+    return encontrados, cotacoes_brutas
 
 
 async def _buscar_precos_fim_de_ano(
@@ -391,14 +487,19 @@ async def _buscar_precos_fim_de_ano(
     return precos_fim_de_ano
 
 
-async def _buscar_preco_final(tickers: list[str], data_fim: date) -> dict[str, tuple[date, float]]:
+async def _buscar_preco_final(
+    tickers: list[str], data_fim: date
+) -> tuple[dict[str, tuple[date, float]], dict[tuple[str, date], float]]:
     """Busca o preço de cada ticker NA data_fim pedida ou no pregão
     disponível mais próximo ANTES dela (dentro da janela de tolerância).
     Se não achar nada no ano de data_fim (ex: data_fim é 2 de janeiro,
     antes do 1º pregão do ano), recua para o fim do(s) ano(s) anterior(es)
-    — mesmo espírito do fallback de `_buscar_preco_atual_com_fallback`."""
+    — mesmo espírito do fallback de `_buscar_preco_atual_com_fallback`.
+    Também devolve as cotações brutas baixadas (ver docstring de
+    `_buscar_preco_atual_com_fallback`)."""
     faltando = set(tickers)
     encontrados: dict[str, tuple[date, float]] = {}
+    cotacoes_brutas: dict[tuple[str, date], float] = {}
 
     for delta in range(ANOS_FALLBACK_PRECO_ATUAL + 1):
         if not faltando:
@@ -410,13 +511,14 @@ async def _buscar_preco_final(tickers: list[str], data_fim: date) -> dict[str, t
         except B3ClientError as exc:
             logger.warning("Falha ao buscar COTAHIST %d para preço de fim do backtest: %s", ano, exc)
             continue
+        cotacoes_brutas.update(cotacoes)
         for ticker in list(faltando):
             achado = _achar_preco_no_ou_antes(cotacoes, ticker, alvo_no_ano)
             if achado:
                 encontrados[ticker] = achado
                 faltando.discard(ticker)
 
-    return encontrados
+    return encontrados, cotacoes_brutas
 
 
 async def calcular_backtest_carteira(
@@ -448,9 +550,9 @@ async def calcular_backtest_carteira(
 
     inicio_cronometro = time.monotonic()
     if data_fim is not None:
-        precos_atuais = await _buscar_preco_final(tickers, data_fim)
+        precos_atuais, cotacoes_brutas_fim = await _buscar_preco_final(tickers, data_fim)
     else:
-        precos_atuais = await _buscar_preco_atual_com_fallback(tickers, hoje.year)
+        precos_atuais, cotacoes_brutas_fim = await _buscar_preco_atual_com_fallback(tickers, hoje.year)
     logger.info("Backtest: preço final pronto em %.1fs", time.monotonic() - inicio_cronometro)
 
     with get_connection() as conn:
@@ -469,6 +571,24 @@ async def calcular_backtest_carteira(
             tickers, dividendos_por_ticker, cotacoes_ano_inicio, precos_atuais, data_inicio.year, data_fim_efetiva.year
         )
 
+    # Detecção por heurística de possíveis desdobramentos/grupamentos/
+    # bonificações (ver Etapa 3 no docstring do módulo) — reaproveita as
+    # cotações já baixadas para os anos de início e fim, sem baixar nada
+    # a mais. Cada ticker é varrido separadamente; eventos já conhecidos
+    # (persistidos ou informados manualmente em item.eventos_societarios)
+    # não geram alerta de novo.
+    alertas_eventos_societarios: dict[str, list[dict]] = {}
+    for item in itens:
+        ticker = item.ticker.upper()
+        serie_ticker = [
+            (data_pregao, preco)
+            for (tk, data_pregao), preco in {**cotacoes_ano_inicio, **cotacoes_brutas_fim}.items()
+            if tk == ticker
+        ]
+        candidatos = detectar_candidatos_eventos_societarios(serie_ticker, item.eventos_societarios)
+        if candidatos:
+            alertas_eventos_societarios[ticker] = candidatos
+
     return montar_resultado_backtest(
         itens,
         data_inicio,
@@ -477,6 +597,7 @@ async def calcular_backtest_carteira(
         reinvestir_dividendos=reinvestir_dividendos,
         dividendos_por_ticker=dividendos_por_ticker,
         precos_fim_de_ano=precos_fim_de_ano,
+        alertas_eventos_societarios=alertas_eventos_societarios,
     )
 
 
@@ -498,6 +619,12 @@ def resultado_para_dict(resultado: ResultadoBacktest) -> dict:
             else None
         ),
         "tickers_com_problema": resultado.tickers_com_problema,
+        "alertas_eventos_societarios": {
+            ticker: [
+                {**candidato, "data": candidato["data"].isoformat()} for candidato in candidatos
+            ]
+            for ticker, candidatos in resultado.alertas_eventos_societarios.items()
+        },
         "itens": [_item_para_dict(item) for item in resultado.itens],
     }
 

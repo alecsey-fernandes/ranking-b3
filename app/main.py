@@ -17,7 +17,7 @@ from app.backtest.calculo import (
     calcular_backtest_carteira,
     resultado_para_dict,
 )
-from app.backtest.schemas import CarteiraBacktestRequest
+from app.backtest.schemas import CarteiraBacktestRequest, ConfirmarEventoSocietarioRequest
 from app.config import PesosEstrategias, pesos_padrao
 from app.data_sources.brapi_client import BrapiClient, BrapiClientError
 from app.data_sources.cvm_client import CvmClientError, inspecionar_arquivo_dfp, listar_arquivos_dfp
@@ -34,6 +34,7 @@ from app.db.repository import (
     concluir_backtest_job,
     criar_backtest_job,
     falhar_backtest_job,
+    salvar_eventos_societarios,
 )
 from app.jobs.atualizar_precos_b3 import atualizar_precos_b3
 from app.jobs.importar_cvm import importar_lucro_historico_cvm
@@ -459,6 +460,25 @@ def _mesclar_eventos_societarios(ticker: str, eventos_manuais: list) -> list[Eve
     return sorted(automaticos + manuais, key=lambda evento: evento.data)
 
 
+@app.post("/eventos-societarios/confirmar")
+async def confirmar_evento_societario(payload: ConfirmarEventoSocietarioRequest):
+    """
+    Registra um evento societário (desdobramento/grupamento/bonificação)
+    já confirmado externamente pelo usuário — normalmente depois de um
+    alerta em `alertas_eventos_societarios` (ver POST /backtest/carteira).
+    A partir daqui, o evento é aplicado automaticamente em qualquer
+    backtest futuro desse ticker, sem precisar informar de novo, e some
+    dos alertas (a detecção por heurística pula datas já registradas).
+    """
+    with get_connection() as conn:
+        salvar_eventos_societarios(
+            conn,
+            payload.ticker.upper(),
+            [{"data": payload.data, "tipo": payload.tipo, "fator": payload.fator, "fonte": "confirmado_manualmente"}],
+        )
+    return {"status": "ok", "ticker": payload.ticker.upper(), "evento_salvo": payload.model_dump(mode="json")}
+
+
 @app.post("/backtest/carteira", status_code=202)
 async def backtest_carteira(payload: CarteiraBacktestRequest, background_tasks: BackgroundTasks):
     """
@@ -484,13 +504,24 @@ async def backtest_carteira(payload: CarteiraBacktestRequest, background_tasks: 
     mais rápido: não precisa baixar cotação extra nenhuma) ou são
     reinvestidos em novas ações (mais lento: busca o preço de fechamento
     do fim de cada ano com dividendo, para cada ticker). Desdobramentos/
-    grupamentos/bonificações já persistidos automaticamente (ver
-    `evento_societario`) são aplicados sem precisar informar nada — hoje
-    essa tabela ainda está vazia, aguardando confirmação de uma fonte
-    gratuita (CVM/FRE); enquanto isso, `eventos_societarios` no payload
-    continua funcionando manualmente e tem prioridade sobre qualquer
-    evento automático na mesma data (serve de correção). Ver
-    `app/backtest/calculo.py` para o detalhe das limitações.
+    grupamentos/bonificações já confirmados e persistidos (tabela
+    `evento_societario`, populada via POST /eventos-societarios/confirmar)
+    são aplicados sem precisar informar nada; `eventos_societarios` no
+    payload continua funcionando manualmente e tem prioridade sobre
+    qualquer evento automático na mesma data (serve de correção).
+
+    Etapa 3: sem fonte gratuita estruturada pra desdobramento/grupamento/
+    bonificação (CVM/FRE foi investigado e descartado — a documentação
+    lista um item que não existe nos arquivos reais), o resultado agora
+    traz `alertas_eventos_societarios`: uma detecção por HEURÍSTICA de
+    saltos de preço fora do normal (≥8% dia a dia) na série já baixada,
+    para cada ticker. É só um ALERTA — nunca é aplicado automaticamente
+    no cálculo. Confirme externamente (RI da empresa, aviso da B3) e
+    registre via POST /eventos-societarios/confirmar se for real; a
+    partir daí some do alerta e passa a ser aplicado sozinho nos
+    próximos backtests. Ver `app/backtest/calculo.py` para o detalhe das
+    limitações (inclusive por que a detecção não cobre anos "no meio" do
+    período que não precisaram ser baixados por outro motivo).
     """
     itens = [
         ItemCarteira(

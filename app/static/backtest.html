@@ -221,6 +221,51 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  .alerta-eventos {
+    background: rgba(224,178,77,0.08);
+    border: 1px solid rgba(224,178,77,0.35);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 18px;
+  }
+  .alerta-eventos h3 {
+    margin: 0 0 6px;
+    font-size: 0.85rem;
+    color: var(--warn);
+  }
+  .alerta-eventos > p.hint { margin-bottom: 12px; }
+  .evento-candidato {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    background: #0d1512;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    font-size: 0.8rem;
+  }
+  .evento-candidato:last-child { margin-bottom: 0; }
+  .evento-candidato .ticker { min-width: 60px; }
+  .evento-candidato .detalhe { color: var(--text-dim); flex: 1; min-width: 200px; }
+  .evento-candidato select {
+    background: #0d1512;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 5px 7px;
+    font-size: 0.78rem;
+  }
+  .evento-candidato .btn-confirmar {
+    background: var(--warn);
+    color: #06130d;
+    font-size: 0.75rem;
+    padding: 5px 10px;
+  }
+  .evento-candidato.confirmado { opacity: 0.6; }
+  .evento-candidato .confirmado-tag { color: var(--accent); font-size: 0.78rem; }
+
   .empty-state {
     text-align: center;
     padding: 50px 20px;
@@ -306,6 +351,7 @@
     <div class="card" id="resultCard" style="display:none;">
       <h2>Resultado</h2>
       <p class="hint" id="resultHint"></p>
+      <div id="alertaEventos"></div>
       <div class="resumo-grid" id="resumoGrid"></div>
       <table style="margin-top:18px;">
         <thead>
@@ -442,6 +488,75 @@ function lerItensDaCarteira() {
   return itens;
 }
 
+function renderAlertaEventos(alertas) {
+  const container = $("alertaEventos");
+  const tickers = Object.keys(alertas || {});
+  if (tickers.length === 0) {
+    container.innerHTML = "";
+    return;
+  }
+
+  const linhas = [];
+  tickers.forEach(ticker => {
+    alertas[ticker].forEach((candidato, idx) => {
+      const id = `evt-${ticker}-${idx}`;
+      const tipoSugerido = candidato.fator_sugerido >= 1 ? "bonificacao" : "grupamento";
+      linhas.push(`
+        <div class="evento-candidato" id="${id}">
+          <span class="ticker">${ticker}</span>
+          <span class="detalhe">
+            ${candidato.data}: ${fmtBRL(candidato.preco_dia_anterior)} → ${fmtBRL(candidato.preco_no_dia)}
+            (${fmtPct(candidato.variacao_pct)}) — fator sugerido ${candidato.fator_sugerido}
+          </span>
+          <select class="tipo-select">
+            <option value="desdobramento" ${tipoSugerido === "bonificacao" ? "" : ""}>Desdobramento</option>
+            <option value="bonificacao" ${tipoSugerido === "bonificacao" ? "selected" : ""}>Bonificação</option>
+            <option value="grupamento" ${tipoSugerido === "grupamento" ? "selected" : ""}>Grupamento</option>
+          </select>
+          <button class="btn-confirmar" onclick="confirmarEvento('${ticker}', '${candidato.data}', ${candidato.fator_sugerido}, '${id}')">Confirmar</button>
+        </div>
+      `);
+    });
+  });
+
+  container.innerHTML = `
+    <div class="alerta-eventos">
+      <h3>⚠ Possíveis eventos societários detectados</h3>
+      <p class="hint">
+        Detecção automática por variação de preço incomum — pode ser desdobramento, grupamento, bonificação,
+        ou simplesmente uma alta/queda real do papel. <b>Confirme externamente</b> (RI da empresa, aviso da B3)
+        antes de confirmar aqui. Enquanto não confirmado, nada disso foi aplicado no cálculo acima.
+      </p>
+      ${linhas.join("")}
+    </div>
+  `;
+}
+
+async function confirmarEvento(ticker, data, fatorSugerido, elId) {
+  const el = $(elId);
+  const select = el.querySelector(".tipo-select");
+  const btn = el.querySelector(".btn-confirmar");
+  const tipo = select.value;
+
+  btn.disabled = true;
+  btn.textContent = "confirmando...";
+
+  try {
+    const r = await fetch("/eventos-societarios/confirmar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticker, data, tipo, fator: fatorSugerido }),
+    });
+    if (!r.ok) throw new Error();
+    el.classList.add("confirmado");
+    select.disabled = true;
+    btn.outerHTML = `<span class="confirmado-tag">✓ confirmado — será aplicado nos próximos backtests</span>`;
+  } catch {
+    btn.disabled = false;
+    btn.textContent = "Confirmar (erro, tentar de novo)";
+  }
+}
+
 function renderResumo(data) {
   const grid = $("resumoGrid");
   const rentClasse = (v) => v == null ? "" : (v >= 0 ? "positivo" : "negativo");
@@ -551,6 +666,7 @@ async function calcularBacktest() {
     const data = resultado.resultado;
     $("resultHint").textContent =
       `Carteira montada em ${data.data_inicio_pedida} até ${data.data_fim_pedida || "o pregão mais recente disponível"}.`;
+    renderAlertaEventos(data.alertas_eventos_societarios);
     renderResumo(data);
     renderResultBody(data);
     $("resultCard").style.display = "block";
