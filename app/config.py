@@ -14,12 +14,12 @@ class PesosEstrategias:
     app/ranking/perfis.py quando essa camada existir).
     """
 
-    magic_formula: float = 25.0
-    piotroski: float = 20.0
-    graham: float = 20.0
-    bazin: float = 15.0
-    buffett_like: float = 15.0
-    peg_lynch: float = 5.0
+    magic_formula: float = 18.0
+    piotroski: float = 15.0
+    graham: float = 10.0
+    bazin: float = 12.0
+    buffett_like: float = 30.0
+    peg_lynch: float = 15.0
 
     def validar_soma(self) -> None:
         total = (

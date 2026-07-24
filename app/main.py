@@ -510,18 +510,15 @@ async def backtest_carteira(payload: CarteiraBacktestRequest, background_tasks: 
     payload continua funcionando manualmente e tem prioridade sobre
     qualquer evento automático na mesma data (serve de correção).
 
-    Etapa 3: sem fonte gratuita estruturada pra desdobramento/grupamento/
-    bonificação (CVM/FRE foi investigado e descartado — a documentação
-    lista um item que não existe nos arquivos reais), o resultado agora
-    traz `alertas_eventos_societarios`: uma detecção por HEURÍSTICA de
-    saltos de preço fora do normal (≥8% dia a dia) na série já baixada,
-    para cada ticker. É só um ALERTA — nunca é aplicado automaticamente
-    no cálculo. Confirme externamente (RI da empresa, aviso da B3) e
-    registre via POST /eventos-societarios/confirmar se for real; a
-    partir daí some do alerta e passa a ser aplicado sozinho nos
-    próximos backtests. Ver `app/backtest/calculo.py` para o detalhe das
-    limitações (inclusive por que a detecção não cobre anos "no meio" do
-    período que não precisaram ser baixados por outro motivo).
+    Etapa 3/4: uma detecção automática por heurística de saltos de preço
+    foi tentada e ABANDONADA (gerava falso positivo demais — ver
+    `app/backtest/calculo.py`). Não existe fonte gratuita estruturada
+    confirmada pra desdobramento/grupamento/bonificação até o momento;
+    `alertas_eventos_societarios` no resultado fica sempre vazio por
+    ora. Para registrar um evento confirmado externamente (RI da
+    empresa, aviso da B3), use POST /eventos-societarios/confirmar — a
+    partir daí é aplicado automaticamente nos próximos backtests, sem
+    precisar informar de novo.
     """
     itens = [
         ItemCarteira(

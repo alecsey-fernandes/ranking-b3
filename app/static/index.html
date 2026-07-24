@@ -505,7 +505,7 @@ async function carregarPesosPadrao() {
     renderPesosInputs(await r.json());
   } catch {
     // fallback se a API estiver fora do ar no carregamento inicial da página
-    renderPesosInputs({ graham: 20, bazin: 15, piotroski: 20, buffett_like: 15, peg_lynch: 5, magic_formula: 25 });
+    renderPesosInputs({ graham: 10, bazin: 12, piotroski: 15, buffett_like: 30, peg_lynch: 15, magic_formula: 18 });
   }
 }
 

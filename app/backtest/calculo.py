@@ -28,42 +28,57 @@ Etapa 2 (esta versão) — o que mudou desde a etapa 1:
   (`eventos_societarios`) e são aplicados à quantidade na data certa,
   antes de aplicar qualquer dividendo que tenha vindo depois.
 
-Etapa 3 (esta versão) — o que mudou desde a etapa 2:
-- Detecção automática por HEURÍSTICA de possíveis desdobramentos/
-  grupamentos/bonificações: não existe fonte gratuita estruturada
-  confirmada pra isso (CVM/FRE foi investigado e descartado — a
+Etapa 3 (tentativa, ABANDONADA na Etapa 4) — detecção automática por
+HEURÍSTICA de saltos de preço:
+- Não existe fonte gratuita estruturada confirmada pra desdobramento/
+  grupamento/bonificação (CVM/FRE foi investigado e descartado — a
   documentação da CVM lista um item que não existe de fato nos arquivos
-  reais). Em vez disso, `detectar_candidatos_eventos_societarios` varre
-  a série de preços já baixada e sinaliza saltos de preço fora do normal
-  entre pregões consecutivos como CANDIDATOS — nunca aplica nada
-  automaticamente no cálculo, só devolve um alerta (`alertas_eventos_societarios`
-  no resultado) para o usuário confirmar externamente (RI da empresa,
-  aviso da B3) e registrar via `POST /eventos-societarios/confirmar`
-  se for real. Uma vez confirmado e salvo, o evento some dos alertas
-  futuros e passa a ser aplicado automaticamente (ver
-  `_mesclar_eventos_societarios` em app/main.py).
+  reais). A tentativa foi sinalizar saltos de preço fora do normal
+  (≥8% dia a dia) como candidatos — nunca aplicando nada automaticamente,
+  só alertando.
+
+Etapa 4 (esta versão) — heurística de preço abandonada, pesos padrão ajustados:
+- A heurística de saltos de preço (Etapa 3) foi testada em produção e
+  gerou falso positivo demais para ser útil — ex: CSED3 sinalizado como
+  candidato em 15/08/2025 por uma queda de 10,1%, que na real era reação
+  a resultado trimestral abaixo do esperado (~0,68% de receita abaixo da
+  expectativa), não um evento societário. Em 12 meses de teste, 7
+  candidatos sinalizados, 0 confirmados. `detectar_candidatos_eventos_societarios`
+  continua no código (útil como referência), mas `calcular_backtest_carteira`
+  NÃO a chama mais — `alertas_eventos_societarios` no resultado fica
+  sempre vazio.
+- Pesquisa de como plataformas como StatusInvest, Investidor10,
+  TradingView e myProfit conseguem fazer isso "com muita confiabilidade
+  sem perguntar nada ao usuário": não é engenharia esperta em cima de
+  dado gratuito — é DADO PAGO/LICENCIADO. A própria B3 vende isso como
+  produto (pacote "eventos corporativos" do UP2DATA), e a myProfit
+  confirma publicamente que sincroniza tudo (bonificação, cisão,
+  agrupamento, desdobramento) via integração direta com a B3 (que exige
+  conta na B3 vinculada, não é dado aberto). Achamos ainda um agregador
+  gratuito (SABBIUS, sabbius.com.br/corporateevent/list) que expõe uma
+  lista estruturada (ticker/data/fator/tipo) "provenientes de fontes
+  públicas: CVM, B3 e Banco Central" — mas é terceiro não-oficial (sem
+  API documentada, HTML sujeito a mudar, Termos de Uso próprios a
+  verificar antes de qualquer raspagem para uso comercial) — não virou
+  fonte da plataforma nesta etapa por esse motivo, mas fica registrado
+  como pista caso valha revisitar.
+- Caminho prático por ora: confirmação MANUAL continua funcionando
+  (`POST /eventos-societarios/confirmar`, tabela `evento_societario`,
+  merge automático em `_mesclar_eventos_societarios`) — só não há mais
+  sugestão automática de candidatos. Avaliar uma fonte paga (B3 UP2DATA
+  ou similar) fica como decisão de negócio para quando o produto for
+  comercializado, não como próxima etapa técnica imediata.
 
 ⚠️ Limitações conhecidas:
 - Eventos societários (splits/bonificações) chegam já prontos em
   `ItemCarteira.eventos_societarios` — quem decide a origem é o chamador
   (ver `_mesclar_eventos_societarios` em app/main.py): combina os já
-  persistidos automaticamente (tabela `evento_societario`, populada por
-  confirmação manual após alerta — ver Etapa 3 acima) com os informados
-  manualmente no payload (que têm prioridade na mesma data, servindo de
-  correção). Este módulo em si é agnóstico à origem — só aplica a lista
-  que recebe.
-- A detecção por heurística só enxerga saltos de preço nos anos cujo
-  arquivo COTAHIST já foi baixado para outro fim (ano de início e ano de
-  fim do período pedido) — um evento no MEIO do período, num ano que não
-  precisou ser baixado por nenhum outro motivo, não é detectado nesta
-  etapa. Baixar todos os anos intermediários só para detecção multiplicaria
-  o custo de cada backtest; fica como possível próxima etapa se isso se
-  mostrar um problema na prática.
-- O limiar de detecção (8% de variação dia-a-dia) é sensível de propósito
-  para pegar bonificações pequenas (ex: BEEF3 em 30/04/2025, fator
-  1129/1000 ≈ 1,129, um salto de preço de ~11,4%) — o que também gera
-  falsos positivos em papéis voláteis com alta/queda real forte num dia
-  só. Por isso o alerta nunca é aplicado sozinho no cálculo.
+  persistidos (tabela `evento_societario`, hoje só populada por
+  confirmação manual via `POST /eventos-societarios/confirmar`, já que a
+  detecção automática foi abandonada — ver Etapa 4 acima) com os
+  informados manualmente no payload (que têm prioridade na mesma data,
+  servindo de correção). Este módulo em si é agnóstico à origem — só
+  aplica a lista que recebe.
 - O valor anual de dividendo por ação vem da importação CVM (agregado do
   ano fiscal, ligado a 31/dez) — não das datas reais de pagamento/JCP.
   O preço usado para "comprar" as ações reinvestidas é o do último pregão
@@ -167,12 +182,19 @@ def detectar_candidatos_eventos_societarios(
     eventos_ja_conhecidos: list[EventoSocietario] | None = None,
 ) -> list[dict]:
     """
+    ⚠️ ABANDONADA (Etapa 4 — ver docstring do módulo): gerou falso
+    positivo demais em teste real (ex: CSED3, queda por resultado
+    trimestral confundida com evento societário; 7 candidatos em 12
+    meses, 0 confirmados). `calcular_backtest_carteira` NÃO chama mais
+    esta função. Mantida no código como referência/histórico, com os
+    testes que provam o comportamento (inclusive o caso que a derrubou).
+
     Varre uma série de (data, preço de fechamento) — não precisa vir
     ordenada, a função ordena — e sinaliza saltos de preço dia-a-dia fora
     do normal (ver LIMIAR_VARIACAO_SUSPEITA_EVENTO) como CANDIDATOS a
     desdobramento/grupamento/bonificação. Função PURA: não baixa nada,
     não aplica nada no cálculo — só devolve a lista de candidatos para o
-    chamador decidir o que fazer (ver Etapa 3 no docstring do módulo).
+    chamador decidir o que fazer.
 
     Pula datas que já têm um evento em `eventos_ja_conhecidos` (persistido
     ou manual) — não repete alerta pra evento que já foi confirmado.
@@ -571,23 +593,13 @@ async def calcular_backtest_carteira(
             tickers, dividendos_por_ticker, cotacoes_ano_inicio, precos_atuais, data_inicio.year, data_fim_efetiva.year
         )
 
-    # Detecção por heurística de possíveis desdobramentos/grupamentos/
-    # bonificações (ver Etapa 3 no docstring do módulo) — reaproveita as
-    # cotações já baixadas para os anos de início e fim, sem baixar nada
-    # a mais. Cada ticker é varrido separadamente; eventos já conhecidos
-    # (persistidos ou informados manualmente em item.eventos_societarios)
-    # não geram alerta de novo.
+    # Detecção por heurística de saltos de preço foi ABANDONADA (ver Etapa
+    # 4 no docstring do módulo) — gerava falso positivo demais em testes
+    # reais (ex: CSED3, queda de earnings confundida com bonificação).
+    # `alertas_eventos_societarios` fica sempre vazio por ora; a estrutura
+    # (campo no resultado, endpoint de confirmação) continua pronta para
+    # uma fonte melhor no futuro.
     alertas_eventos_societarios: dict[str, list[dict]] = {}
-    for item in itens:
-        ticker = item.ticker.upper()
-        serie_ticker = [
-            (data_pregao, preco)
-            for (tk, data_pregao), preco in {**cotacoes_ano_inicio, **cotacoes_brutas_fim}.items()
-            if tk == ticker
-        ]
-        candidatos = detectar_candidatos_eventos_societarios(serie_ticker, item.eventos_societarios)
-        if candidatos:
-            alertas_eventos_societarios[ticker] = candidatos
 
     return montar_resultado_backtest(
         itens,
